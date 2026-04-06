@@ -16,7 +16,7 @@ def load_files(base_path):
     dict_events = {}
     dict_tracking = {}
     
-    for file_event, file_tracking in zip(events_files, tracking_parquet_files):
+    for file_event, file_tracking in zip(events_files[:1], tracking_parquet_files[:1]):
         game_id = file_event.split(".")[0]
         efile_path = os.path.join(base_path, "eventdata", file_event)
         event_df = load_events_from_json(efile_path)
