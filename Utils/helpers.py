@@ -87,9 +87,21 @@ def clean_tracking_data(base_path):
 
                 tracking_df_clean = pd.concat([clean_safe, keep_problem], ignore_index=True)
 
+            # --- BALL COORDINATES CLEANING ---
+            tracking_df_clean["ball_x"] = tracking_df_clean["ballsSmoothed"].apply(
+                lambda b: b["x"] if isinstance(b, dict) else None
+            )
+            tracking_df_clean["ball_y"] = tracking_df_clean["ballsSmoothed"].apply(
+                lambda b: b["y"] if isinstance(b, dict) else None
+            )
+
+            # Clip to pitch
+            tracking_df_clean["ball_x"] = tracking_df_clean["ball_x"].clip(-54.5, 54.5)
+            tracking_df_clean["ball_y"] = tracking_df_clean["ball_y"].clip(-36, 36)
+
             # Drop temp cols
             tracking_df_clean = tracking_df_clean.drop(
-                columns=["homePlayers_norm", "awayPlayers_norm"]
+                columns=["homePlayers_norm", "awayPlayers_norm", "ball_x", "ball_y"]
             )
 
         # --- SAVE BACK ---
