@@ -1,0 +1,3 @@
+databallpy==0.7.3
+kloppy==3.18.0
+pandas==3.0.2
