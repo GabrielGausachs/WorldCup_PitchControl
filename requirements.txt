@@ -1,3 +1,5 @@
 databallpy==0.7.3
 kloppy==3.18.0
 pandas==3.0.2
+scikit-learn==1.7.2
+mplsoccer==1.4.0

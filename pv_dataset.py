@@ -1,6 +1,8 @@
 import os
 import time
 import argparse
+import random
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -12,21 +14,6 @@ from Utils.config import DATA_ROOT
 
 def identify_defensive_situations(tracking_df):
     tracking_df = tracking_df.copy()
-    tracking_df["team_in_possession"] = tracking_df["game_event"].apply(
-        lambda x: x.get("team_name") if isinstance(x, dict) else None
-    )
-    tracking_df["home_team_in_possession"] = tracking_df["game_event"].apply(
-        lambda x: x.get("home_team") if isinstance(x, dict) else None
-    )
-
-    tracking_team_not_null = tracking_df[tracking_df["team_in_possession"].notnull()].copy()
-    tracking_team_not_null["time_bin_3s"] = (tracking_team_not_null["periodGameClockTime"] // 3).astype(int)
-    tracking_rows = (
-        tracking_team_not_null.sort_values(["period", "periodGameClockTime"])
-        .groupby(["period", "time_bin_3s"])
-        .first()
-        .reset_index()
-    )
 
     def valid_ball(x):
         if not isinstance(x, dict):
@@ -47,13 +34,62 @@ def identify_defensive_situations(tracking_df):
                 return False
         return True
 
-    tracking_rows = tracking_rows[
-        (tracking_rows["ballsSmoothed"].apply(valid_ball))
-        & (tracking_rows["homePlayersSmoothed"].apply(valid_players))
-        & (tracking_rows["awayPlayersSmoothed"].apply(valid_players))
+    tracking_rows = tracking_df[
+        (tracking_df["ballsSmoothed"].apply(valid_ball))
+        & (tracking_df["homePlayersSmoothed"].apply(valid_players))
+        & (tracking_df["awayPlayersSmoothed"].apply(valid_players))
     ].copy()
 
-    return tracking_rows
+    # Keep possession context for downstream logic
+    tracking_rows["team_in_possession"] = tracking_rows["game_event"].apply(
+        lambda x: x.get("team_name") if isinstance(x, dict) else None
+    )
+    tracking_rows["home_team_in_possession"] = tracking_rows["game_event"].apply(
+        lambda x: x.get("home_team") if isinstance(x, dict) else None
+    )
+
+    # Event-based sampling from possession events
+    def _event_type(x):
+        return x.get("possession_event_type") if isinstance(x, dict) else None
+
+    tracking_passes = tracking_rows[tracking_rows["possession_event"].apply(lambda x: _event_type(x) == "PA")].copy()
+    tracking_shots = tracking_rows[tracking_rows["possession_event"].apply(lambda x: _event_type(x) == "SH")].copy()
+    tracking_crosses = tracking_rows[tracking_rows["possession_event"].apply(lambda x: _event_type(x) == "CR")].copy()
+    tracking_ball_carries = tracking_rows[tracking_rows["possession_event"].apply(lambda x: _event_type(x) == "BC")].copy()
+
+    print(
+        "Selected possession events:",
+        f"PA={len(tracking_passes)}",
+        f"SH={len(tracking_shots)}",
+        f"CR={len(tracking_crosses)}",
+        f"BC={len(tracking_ball_carries)}",
+    )
+
+    tracking_event_rows = pd.concat(
+        [tracking_passes, tracking_shots, tracking_crosses, tracking_ball_carries],
+        ignore_index=True,
+    )
+
+    tracking_event_rows["possession_start_frame"] = tracking_event_rows["possession_event"].apply(
+        lambda x: x.get("start_frame") if isinstance(x, dict) else None
+    )
+    before_dropna = len(tracking_event_rows)
+    tracking_event_rows = tracking_event_rows[tracking_event_rows["possession_start_frame"].notnull()].copy()
+    tracking_event_rows["possession_start_frame"] = tracking_event_rows["possession_start_frame"].astype(int)
+    after_dropna = len(tracking_event_rows)
+    before_dedup = len(tracking_event_rows)
+    tracking_event_rows = tracking_event_rows.drop_duplicates(subset=["possession_start_frame"]).copy()
+    after_dedup = len(tracking_event_rows)
+
+    print(
+        "Event frame filtering:",
+        f"before_start_frame_filter={before_dropna}",
+        f"after_start_frame_filter={after_dropna}",
+        f"before_dedup={before_dedup}",
+        f"after_dedup_unique_frames={after_dedup}",
+    )
+
+    return tracking_event_rows
 
 
 def get_grid_centers(n_x=21, n_y=15, pitch_length=105, pitch_width=68):
@@ -90,7 +126,7 @@ def creation_pv_dataset(tracking_df: pd.DataFrame, game) -> pd.DataFrame:
     skipped_invalid_influence_shape = 0
 
     for _, row in tracking_rows.iterrows():
-        frame_num = row["frameNum"]
+        frame_num = row["possession_start_frame"]
         idx = game.tracking_data.index[game.tracking_data["frame"] == frame_num]
         if len(idx) == 0:
             skipped_missing_frame += 1
@@ -191,25 +227,57 @@ def creation_pv_dataset(tracking_df: pd.DataFrame, game) -> pd.DataFrame:
 
 
 def build_pv_datasets_for_all_games(base_path: str) -> tuple[int, int, list[str]]:
-    game_ids = sorted(
+    game_ids_all = sorted(
         [gid.split(".")[0] for gid in os.listdir(os.path.join(base_path, "eventdata"))]
     )
+    rng = random.Random(42)
+    rng.shuffle(game_ids_all)
     output_dir = os.path.join(base_path, "datasets_pitch_value")
     os.makedirs(output_dir, exist_ok=True)
+    existing_files = [
+        f for f in os.listdir(output_dir) if f.startswith("dataset_") and f.endswith(".csv")
+    ]
+    existing_game_ids = {
+        f.replace("dataset_", "").replace(".csv", "") for f in existing_files
+    }
 
     total_frames = 0
     total_rows = 0
     failed_games = []
+    warning_games = []
+    processed_games = []
+    target_games = 10
+    remaining_games_to_process = max(0, target_games - len(existing_game_ids))
 
-    for game_id in game_ids:
+    print(
+        f"Existing datasets found: {len(existing_game_ids)}",
+        f"Remaining games to process: {remaining_games_to_process}",
+    )
+    if remaining_games_to_process == 0:
+        print("Target already reached. Nothing to process.")
+        return total_frames, total_rows, failed_games
+
+    for game_id in game_ids_all:
+        if len(processed_games) >= remaining_games_to_process:
+            break
+        if game_id in existing_game_ids:
+            continue
         print(f"Processing game {game_id}...")
         try:
-            _, tracking_df = load_files(base_path, game_id)            
-            game = load_game_from_pff(base_path, game_id)
+            _, tracking_df = load_files(base_path, game_id)
+            with warnings.catch_warnings(record=True) as caught_warnings:
+                warnings.simplefilter("always")
+                game = load_game_from_pff(base_path, game_id)
+            if len(caught_warnings) > 0:
+                warning_games.append(game_id)
+                print(f"Skipping game {game_id} due to load warnings ({len(caught_warnings)} warnings).")
+                print("-" * 50)
+                continue
             dataset = creation_pv_dataset(tracking_df, game)
 
             total_frames += len(dataset["frameNum"].unique())
             total_rows += len(dataset)
+            processed_games.append(game_id)
 
             dataset.to_csv(
                 os.path.join(output_dir, f"dataset_{game_id}.csv"), index=False
@@ -224,6 +292,15 @@ def build_pv_datasets_for_all_games(base_path: str) -> tuple[int, int, list[str]
         print("-" * 50)
         time.sleep(5)
 
+    if len(processed_games) < remaining_games_to_process:
+        print(
+            f"WARNING: Only {len(processed_games)} clean games processed "
+            f"(needed {remaining_games_to_process} to reach target {target_games})."
+        )
+
+    print(f"Previously existing datasets ({len(existing_game_ids)}): {sorted(existing_game_ids)}")
+    print(f"Newly processed clean games ({len(processed_games)}): {processed_games}")
+    print(f"Skipped due to warnings ({len(warning_games)}): {warning_games}")
     print(f"Total frames processed: {total_frames}")
     print(f"Total rows in all datasets: {total_rows}")
     print(f"Failed games count: {len(failed_games)}")
