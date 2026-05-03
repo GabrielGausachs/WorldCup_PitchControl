@@ -10,17 +10,10 @@ from pv_goal_normalization import goal_distance_factor, normalize_pitch_value_by
 from pv_heatmap_plotting import draw_pitch, plot_heatmap
 
 
-def get_grid_centers(n_x=21, n_y=15, pitch_length=105.0, pitch_width=68.0):
-    x_edges = np.linspace(-pitch_length / 2.0, pitch_length / 2.0, n_x + 1)
-    y_edges = np.linspace(-pitch_width / 2.0, pitch_width / 2.0, n_y + 1)
-    x_centers = (x_edges[:-1] + x_edges[1:]) / 2.0
-    y_centers = (y_edges[:-1] + y_edges[1:]) / 2.0
-    return x_centers, y_centers
-
-
-def get_grid(n_x=21, n_y=15, pitch_length=105.0, pitch_width=68.0):
-    x_centers, y_centers = get_grid_centers(n_x=n_x, n_y=n_y, pitch_length=pitch_length, pitch_width=pitch_width)
-    return np.meshgrid(x_centers, y_centers, indexing="ij")
+def get_grid(n_x=105, n_y=68, pitch_length=105.0, pitch_width=68.0):
+    x_coords = np.linspace(-pitch_length / 2.0, pitch_length / 2.0, n_x)
+    y_coords = np.linspace(-pitch_width / 2.0, pitch_width / 2.0, n_y)
+    return np.meshgrid(x_coords, y_coords, indexing="ij")
 
 
 def predict_surface(model, ball_x, ball_y, X, Y):
@@ -48,7 +41,7 @@ def save_heatmap(
     ball_y=None,
 ):
     fig, ax = plt.subplots(figsize=(10, 6))
-    draw_pitch(ax=ax, pitch_length=pitch_length, pitch_width=pitch_width)
+    draw_pitch(ax=ax, pitch_length=pitch_length, pitch_width=pitch_width, fill_pitch=True)
     heat = plot_heatmap(
         ax=ax,
         X=X,
@@ -64,13 +57,15 @@ def save_heatmap(
         bx = ball_x + (pitch_length / 2.0)
         by = ball_y + (pitch_width / 2.0)
         ax.scatter(bx, by, s=40, c="white", edgecolors="black", linewidths=0.8, zorder=5)
+    # Redraw pitch lines on top so all markings stay black and visible.
+    draw_pitch(ax=ax, pitch_length=pitch_length, pitch_width=pitch_width, fill_pitch=False)
     fig.colorbar(heat, ax=ax, fraction=0.03, pad=0.02)
     fig.tight_layout()
     fig.savefig(out_path, dpi=200)
     plt.close(fig)
 
 
-def generate_heatmaps(base_path, output_dir, n_x=21, n_y=15, pitch_length=105.0, pitch_width=68.0):
+def generate_heatmaps(base_path, output_dir, n_x=105, n_y=68, pitch_length=105.0, pitch_width=68.0):
     model_path = Path(base_path) / "processed_pitch_value" / "models" / "pv_mlp.pkl"
     if not model_path.exists():
         raise FileNotFoundError(f"Model not found: {model_path}")
@@ -147,8 +142,8 @@ def main():
     parser = argparse.ArgumentParser(description="Generate paper-style PV heatmaps.")
     parser.add_argument("--base-path", default=DATA_ROOT, help="Root path containing processed_pitch_value/models.")
     parser.add_argument("--output-dir", default="Outputs", help="Folder to save heatmap PNGs.")
-    parser.add_argument("--grid-x", type=int, default=21, help="Number of grid cells in x direction.")
-    parser.add_argument("--grid-y", type=int, default=15, help="Number of grid cells in y direction.")
+    parser.add_argument("--grid-x", type=int, default=105, help="Number of x coordinates for inference grid.")
+    parser.add_argument("--grid-y", type=int, default=68, help="Number of y coordinates for inference grid.")
     args = parser.parse_args()
 
     generate_heatmaps(

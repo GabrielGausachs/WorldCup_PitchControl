@@ -4,13 +4,14 @@ from matplotlib.colors import LinearSegmentedColormap
 from mplsoccer import Pitch
 
 
-def draw_pitch(ax, pitch_length=105.0, pitch_width=68.0):
+def draw_pitch(ax, pitch_length=105.0, pitch_width=68.0, fill_pitch=True):
     pitch = Pitch(
         pitch_type="custom",
         pitch_length=pitch_length,
         pitch_width=pitch_width,
         line_color="black",
-        pitch_color="white",
+        pitch_color="white" if fill_pitch else "None",
+        line_zorder=5,
     )
     pitch.draw(ax=ax)
     return pitch
@@ -32,7 +33,17 @@ def plot_heatmap(ax, X, Y, Z, title, vmin=0.0, vmax=1.0, pitch_length=105.0, pit
     X_plot = X + (pitch_length / 2.0)
     Y_plot = Y + (pitch_width / 2.0)
 
-    heat = ax.pcolormesh(X_plot, Y_plot, np.clip(Z, vmin, vmax), cmap=cmap, vmin=vmin, vmax=vmax, shading="auto")
+    heat = ax.pcolormesh(
+        X_plot,
+        Y_plot,
+        np.clip(Z, vmin, vmax),
+        cmap=cmap,
+        vmin=vmin,
+        vmax=vmax,
+        shading="auto",
+        alpha=0.9,
+        zorder=2,
+    )
     ax.set_title(title)
     ax.set_aspect("equal", adjustable="box")
     ax.set_axis_off()
