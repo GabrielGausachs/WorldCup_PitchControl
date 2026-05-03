@@ -56,7 +56,7 @@ def _build_game_data(selected_games: list[str], game_to_file: dict[str, Path]) -
     return game_data
 
 
-def _train_and_eval(train_x, train_y, val_x, val_y, hidden_size, seed):
+def _train_and_eval(train_x, train_y, val_x, val_y, hidden_size, seed, max_iter):
     model = Pipeline(
         steps=[
             ("scaler", StandardScaler()),
@@ -67,22 +67,42 @@ def _train_and_eval(train_x, train_y, val_x, val_y, hidden_size, seed):
                     activation="logistic",
                     solver="adam",
                     random_state=seed,
-                    max_iter=200,
+                    batch_size=4096,
+                    max_iter=max_iter,
+                    early_stopping=True,
+                    n_iter_no_change=10,
                 ),
             ),
         ]
     )
     model.fit(train_x, train_y)
+    mlp = model.named_steps["mlp"]
+    last_loss = getattr(mlp, "loss_", getattr(mlp, "loss", None))
+    print("epochs:", mlp.n_iter_)
+    print("best validation score:", mlp.best_validation_score_)
+    print("last training loss:", last_loss)
+    print("last 10 validation scores:", mlp.validation_scores_[-10:])
+    print("last 10 training losses:", mlp.loss_curve_[-10:])
     pred = model.predict(val_x)
-    return float(mean_squared_error(val_y, pred))
+    mse = float(mean_squared_error(val_y, pred))
+    diagnostics = {
+        "epochs": mlp.n_iter_,
+        "best_validation_score": mlp.best_validation_score_,
+        "last_training_loss": last_loss,
+        "last_10_validation_scores": mlp.validation_scores_[-10:],
+        "last_10_training_losses": mlp.loss_curve_[-10:],
+    }
+    return mse, diagnostics
 
 
 def train_model(
     base_path: str,
     n_games: int = 10,
     seed: int = 42,
-    hidden_sizes: tuple[int, ...] = (32, 64),
+    hidden_sizes: tuple[int, ...] = (8, 16, 32),
     cv_folds: int = 5,
+    max_iter: int = 100,
+    diagnostics_file: str | None = None,
 ):
     dataset_dir = Path(base_path) / "datasets_pitch_value"
     output_dir = Path(base_path) / "processed_pitch_value" / "models"
@@ -101,6 +121,20 @@ def train_model(
     game_data = _build_game_data(selected_games=selected_games, game_to_file=game_to_file)
     selected_rows = int(sum(game_data[g][1].shape[0] for g in selected_games))
     print(f"[INFO] Loaded selected games. Total rows: {selected_rows}")
+    diag_path = None
+    if diagnostics_file:
+        diag_path = Path(diagnostics_file)
+    else:
+        diag_path = output_dir / "pv_training_diagnostics.txt"
+    diag_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(diag_path, "w", encoding="utf-8") as f:
+        f.write("Pitch Value Training Diagnostics\n")
+        f.write(f"seed={seed}\n")
+        f.write(f"selected_games={selected_games}\n")
+        f.write(f"cv_folds={cv_folds}\n")
+        f.write(f"hidden_sizes={list(hidden_sizes)}\n")
+        f.write(f"max_iter={max_iter}\n")
+        f.write("\n")
 
     hidden_size_results = {}
     kf = KFold(n_splits=cv_folds, shuffle=True, random_state=seed)
@@ -117,12 +151,30 @@ def train_model(
             val_x = np.concatenate([game_data[g][0] for g in val_games], axis=0)
             val_y = np.concatenate([game_data[g][1] for g in val_games], axis=0)
 
-            mse = _train_and_eval(train_x, train_y, val_x, val_y, hidden_size=hidden_size, seed=seed)
+            mse, fold_diag = _train_and_eval(
+                train_x,
+                train_y,
+                val_x,
+                val_y,
+                hidden_size=hidden_size,
+                seed=seed,
+                max_iter=max_iter,
+            )
             fold_mse.append({"val_game_ids": val_games, "mse": mse})
             print(
                 f"[INFO] hidden_size={hidden_size} fold={fold_idx}/{cv_folds} "
                 f"val_games={val_games} mse={mse:.6f}"
             )
+            with open(diag_path, "a", encoding="utf-8") as f:
+                f.write(f"hidden_size={hidden_size} fold={fold_idx}/{cv_folds}\n")
+                f.write(f"val_games={val_games}\n")
+                f.write(f"mse={mse}\n")
+                f.write(f"epochs={fold_diag['epochs']}\n")
+                f.write(f"best_validation_score={fold_diag['best_validation_score']}\n")
+                f.write(f"last_training_loss={fold_diag['last_training_loss']}\n")
+                f.write(f"last_10_validation_scores={fold_diag['last_10_validation_scores']}\n")
+                f.write(f"last_10_training_losses={fold_diag['last_10_training_losses']}\n")
+                f.write("\n")
 
         mean_mse = float(np.mean([m["mse"] for m in fold_mse]))
         hidden_size_results[str(hidden_size)] = {"fold_mse": fold_mse, "mean_mse": mean_mse}
@@ -147,13 +199,32 @@ def train_model(
                     activation="logistic",
                     solver="adam",
                     random_state=seed,
-                    max_iter=200,
+                    batch_size=4096,
+                    max_iter=max_iter,
+                    early_stopping=True,
+                    n_iter_no_change=10,
                 ),
             ),
         ]
     )
     final_model.fit(full_x, full_y)
     print("[INFO] Final model training complete.")
+    final_mlp = final_model.named_steps["mlp"]
+    final_last_loss = getattr(final_mlp, "loss_", getattr(final_mlp, "loss", None))
+    print("epochs:", final_mlp.n_iter_)
+    print("best validation score:", final_mlp.best_validation_score_)
+    print("last training loss:", final_last_loss)
+    print("last 10 validation scores:", final_mlp.validation_scores_[-10:])
+    print("last 10 training losses:", final_mlp.loss_curve_[-10:])
+    with open(diag_path, "a", encoding="utf-8") as f:
+        f.write("final_model\n")
+        f.write(f"best_hidden_size={best_hidden_size}\n")
+        f.write(f"epochs={final_mlp.n_iter_}\n")
+        f.write(f"best_validation_score={final_mlp.best_validation_score_}\n")
+        f.write(f"last_training_loss={final_last_loss}\n")
+        f.write(f"last_10_validation_scores={final_mlp.validation_scores_[-10:]}\n")
+        f.write(f"last_10_training_losses={final_mlp.loss_curve_[-10:]}\n")
+        f.write("\n")
 
     model_path = output_dir / "pv_mlp.pkl"
     metrics_path = output_dir / "pv_train_metrics.json"
@@ -165,6 +236,7 @@ def train_model(
         "selected_games": selected_games,
         "hidden_sizes_tested": list(hidden_sizes),
         "cv_folds": cv_folds,
+        "max_iter": max_iter,
         "best_hidden_size": best_hidden_size,
         "cv_results": hidden_size_results,
         "n_rows_selected": int(full_y.shape[0]),
@@ -176,6 +248,7 @@ def train_model(
     print(f"[INFO] Selected rows: {metrics['n_rows_selected']}")
     print(f"[INFO] Model saved: {model_path}")
     print(f"[INFO] Metrics saved: {metrics_path}")
+    print(f"[INFO] Diagnostics saved: {diag_path}")
 
 
 def main():
@@ -187,10 +260,16 @@ def main():
         "--hidden-sizes",
         nargs="+",
         type=int,
-        default=[32, 64],
+        default=[8, 16, 32],
         help="Hidden layer sizes to evaluate.",
     )
     parser.add_argument("--cv-folds", type=int, default=5, help="Number of cross-validation folds.")
+    parser.add_argument("--max-iter", type=int, default=100, help="Maximum training iterations for MLP.")
+    parser.add_argument(
+        "--diagnostics-file",
+        default=None,
+        help="Optional path to save training diagnostics text file.",
+    )
     args = parser.parse_args()
 
     train_model(
@@ -199,6 +278,8 @@ def main():
         seed=args.seed,
         hidden_sizes=tuple(args.hidden_sizes),
         cv_folds=args.cv_folds,
+        max_iter=args.max_iter,
+        diagnostics_file=args.diagnostics_file,
     )
 
 
