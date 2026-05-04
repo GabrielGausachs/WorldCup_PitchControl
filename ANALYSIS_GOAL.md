@@ -9,7 +9,14 @@ The goal is to measure:
 
 Instead of only counting recoveries, this analysis evaluates the **spatial value created after the recovery**.
 
-For every recovery:
+Recovery definition for this stage (pass-only recoveries):
+
+- Use only pass events from event data JSON.
+- A recovery is identified when `possession_event.passOutcomeType == "Defensive Interception"`.
+- Then compare `homeTeam` in that pass row vs. `homeTeam` in the row of the next `game_event_id`.
+- If those `homeTeam` values are different, mark that moment as a recovery.
+
+For every recovery (as defined above):
 
 1. Compute the space quality around the ball at the recovery time.
 2. Track the space quality around the ball for the next 5 seconds.
