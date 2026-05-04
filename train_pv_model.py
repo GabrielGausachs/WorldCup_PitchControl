@@ -264,7 +264,7 @@ def main():
         help="Hidden layer sizes to evaluate.",
     )
     parser.add_argument("--cv-folds", type=int, default=5, help="Number of cross-validation folds.")
-    parser.add_argument("--max-iter", type=int, default=100, help="Maximum training iterations for MLP.")
+    parser.add_argument("--max-iter", type=int, default=200, help="Maximum training iterations for MLP.")
     parser.add_argument(
         "--diagnostics-file",
         default=None,

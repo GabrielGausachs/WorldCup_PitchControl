@@ -14,20 +14,23 @@ from Utils.config import DATA_ROOT
 
 def identify_defensive_situations(tracking_df):
     tracking_df = tracking_df.copy()
+    tracking_df["home_ball_in_possession"] = tracking_df["game_event"].apply(
+        lambda x: x.get("home_ball") if isinstance(x, dict) else None
+    )
+    # Keep possession context field for compatibility with current pipeline structure
     tracking_df["team_in_possession"] = tracking_df["game_event"].apply(
         lambda x: x.get("team_name") if isinstance(x, dict) else None
     )
-    tracking_df["home_team_in_possession"] = tracking_df["game_event"].apply(
-        lambda x: x.get("home_team") if isinstance(x, dict) else None
-    )
 
-    tracking_team_not_null = tracking_df[tracking_df["team_in_possession"].notnull()].copy()
-    tracking_team_not_null["time_bin_3s"] = (tracking_team_not_null["periodGameClockTime"] // 3).astype(int)
-    tracking_rows = (
-        tracking_team_not_null.sort_values(["period", "periodGameClockTime"])
-        .groupby(["period", "time_bin_3s"])
-        .first()
-        .reset_index()
+    # 1) First filter by home_ball availability
+    tracking_rows = tracking_df[tracking_df["home_ball_in_possession"].notnull()].copy()
+    before_home_ball_filter = len(tracking_df)
+    after_home_ball_filter = len(tracking_rows)
+    print(
+        "home_ball filtering summary:",
+        f"before={before_home_ball_filter}",
+        f"after={after_home_ball_filter}",
+        f"removed={before_home_ball_filter - after_home_ball_filter}",
     )
 
     def valid_ball(x):
@@ -45,15 +48,43 @@ def identify_defensive_situations(tracking_df):
                 return False
             x = player.get("x")
             y = player.get("y")
-            if x is None or y is None or not np.isfinite(x) or not np.isfinite(y):
+            if (
+                x is None
+                or y is None
+                or not np.isfinite(x)
+                or not np.isfinite(y)
+            ):
                 return False
         return True
 
+    # 2) Then filter by valid ball + valid players
+    before_valid_filter = len(tracking_rows)
     tracking_rows = tracking_rows[
         (tracking_rows["ballsSmoothed"].apply(valid_ball))
         & (tracking_rows["homePlayersSmoothed"].apply(valid_players))
         & (tracking_rows["awayPlayersSmoothed"].apply(valid_players))
     ].copy()
+    after_valid_filter = len(tracking_rows)
+    print(
+        "Player validity filtering summary:",
+        f"before={before_valid_filter}",
+        f"after={after_valid_filter}",
+        f"removed={before_valid_filter - after_valid_filter}",
+    )
+
+    # 3) Keep frames at least 2 seconds apart (within each period)
+    before_spacing_filter = len(tracking_rows)
+    tracking_rows = tracking_rows.sort_values(["period", "periodGameClockTime"]).copy()
+    time_diff = tracking_rows.groupby("period")["periodGameClockTime"].diff()
+    keep_mask = time_diff.isna() | (time_diff >= 2.0)
+    tracking_rows = tracking_rows[keep_mask].copy()
+    after_spacing_filter = len(tracking_rows)
+    print(
+        "2-second spacing summary:",
+        f"before={before_spacing_filter}",
+        f"after={after_spacing_filter}",
+        f"removed={before_spacing_filter - after_spacing_filter}",
+    )
 
     return tracking_rows
 
@@ -86,10 +117,12 @@ def creation_pv_dataset(tracking_df: pd.DataFrame, game) -> pd.DataFrame:
     print(f"identify_defensive_situations returned {len(tracking_rows)} tracking rows")
     data_rows = []
     skipped_missing_frame = 0
-    skipped_non_bool_possession = 0
+    skipped_non_bool_home_ball = 0
     skipped_no_defending_ids = 0
     skipped_influence_error = 0
     skipped_invalid_influence_shape = 0
+    home_ball_true_count = 0
+    home_ball_false_count = 0
 
     for _, row in tracking_rows.iterrows():
         frame_num = row["frameNum"]
@@ -100,27 +133,32 @@ def creation_pv_dataset(tracking_df: pd.DataFrame, game) -> pd.DataFrame:
 
         frame = game.tracking_data.loc[idx[0]]
 
-        home_team_in_possession_raw = row["home_team_in_possession"]
-        if pd.isna(home_team_in_possession_raw):
-            skipped_non_bool_possession += 1
+        home_ball_in_possession_raw = row["home_ball_in_possession"]
+        if pd.isna(home_ball_in_possession_raw):
+            skipped_non_bool_home_ball += 1
             continue
         try:
-            if isinstance(home_team_in_possession_raw, str):
-                value = home_team_in_possession_raw.strip().lower()
+            if isinstance(home_ball_in_possession_raw, str):
+                value = home_ball_in_possession_raw.strip().lower()
                 if value in {"1", "true", "t", "yes", "y"}:
-                    home_team_in_possession = True
+                    home_ball_in_possession = True
                 elif value in {"0", "false", "f", "no", "n"}:
-                    home_team_in_possession = False
+                    home_ball_in_possession = False
                 else:
-                    skipped_non_bool_possession += 1
+                    skipped_non_bool_home_ball += 1
                     continue
             else:
-                home_team_in_possession = bool(int(home_team_in_possession_raw))
+                home_ball_in_possession = bool(home_ball_in_possession_raw)
         except Exception:
-            skipped_non_bool_possession += 1
+            skipped_non_bool_home_ball += 1
             continue
 
-        defenders_are_home = not home_team_in_possession
+        if home_ball_in_possession:
+            home_ball_true_count += 1
+        else:
+            home_ball_false_count += 1
+
+        defenders_are_home = not home_ball_in_possession
         defending_col_ids = home_col_ids if defenders_are_home else away_col_ids
         if len(defending_col_ids) == 0:
             skipped_no_defending_ids += 1
@@ -175,10 +213,12 @@ def creation_pv_dataset(tracking_df: pd.DataFrame, game) -> pd.DataFrame:
         f"input_rows={len(tracking_rows)}",
         f"kept_frames={len(data_rows)}",
         f"skipped_missing_frame={skipped_missing_frame}",
-        f"skipped_non_bool_possession={skipped_non_bool_possession}",
+        f"skipped_non_bool_home_ball={skipped_non_bool_home_ball}",
         f"skipped_no_defending_ids={skipped_no_defending_ids}",
         f"skipped_influence_error={skipped_influence_error}",
         f"skipped_invalid_influence_shape={skipped_invalid_influence_shape}",
+        f"home_ball_true_count={home_ball_true_count}",
+        f"home_ball_false_count={home_ball_false_count}",
     )
 
     if not data_rows:
