@@ -1,4 +1,5 @@
 import argparse
+import json
 import random
 from pathlib import Path
 
@@ -8,8 +9,10 @@ import numpy as np
 import pandas as pd
 from mplsoccer import Pitch
 
-DEFAULT_TRACKING_DIR = Path(r"C:\Users\gausachsfernandezg\OneDrive - TNO\project_football\pff_data\trackingdata_parquet")
-TARGET_POSSESSION_TYPES = {"PA", "CH"}
+from Utils.config import DATA_ROOT
+
+DEFAULT_TRACKING_DIR = Path(DATA_ROOT) / "trackingdata_parquet"
+DEFAULT_EVENT_DIR = Path(DATA_ROOT) / "eventdata"
 REQUIRED_BASE_COLUMNS = [
     "gameRefId",
     "frameNum",
@@ -33,9 +36,12 @@ OUTPUT_COLUMNS = [
     "home_ball",
     "game_event_start_frame",
     "game_event_end_frame",
+    "game_event_start_time",
+    "game_event_end_time",
     "possession_event_type",
     "possession_start_frame",
     "possession_end_frame",
+    "possession_start_time",
 ]
 
 
@@ -77,6 +83,8 @@ def _add_nested_columns(df: pd.DataFrame) -> pd.DataFrame:
     df["home_ball"] = df["game_event"].apply(lambda x: _extract_from_dict(x, "home_ball"))
     df["game_event_start_frame"] = df["game_event"].apply(lambda x: _extract_from_dict(x, "start_frame"))
     df["game_event_end_frame"] = df["game_event"].apply(lambda x: _extract_from_dict(x, "end_frame"))
+    df["game_event_start_time"] = df["game_event"].apply(lambda x: _extract_from_dict(x, "start_time"))
+    df["game_event_end_time"] = df["game_event"].apply(lambda x: _extract_from_dict(x, "end_time"))
 
     df["possession_event_type"] = df["possession_event"].apply(
         lambda x: _extract_from_dict(x, "possession_event_type")
@@ -87,41 +95,41 @@ def _add_nested_columns(df: pd.DataFrame) -> pd.DataFrame:
     df["possession_end_frame"] = df["possession_event"].apply(
         lambda x: _extract_from_dict(x, "end_frame")
     )
+    df["possession_start_time"] = df["possession_event"].apply(
+        lambda x: _extract_from_dict(x, "start_time")
+    )
 
     return df
 
 
-def _pick_window(
-    df: pd.DataFrame, max_frames: int, seed: int | None, target_possession_types: set[str]
-) -> pd.DataFrame:
-    # Candidate frame i where possession_event_type is PA/CH and
-    # home_ball flips to opposite value within the next 10 frames.
-    candidate_idx = []
-    n = len(df)
-    for i in range(n):
-        if df.iloc[i]["possession_event_type"] not in target_possession_types:
+def _extract_d_pass_possession_id(events: list[dict], seed: int | None) -> tuple[int, dict]:
+    candidates = []
+    for event in events:
+        if not isinstance(event, dict):
             continue
-        current_home_ball = df.iloc[i]["home_ball"]
-        if current_home_ball not in [True, False]:
+        possession_event = event.get("possessionEvents")
+        if not isinstance(possession_event, dict):
             continue
-        upper = min(i + 10, n - 1)
-        found_flip = False
-        for j in range(i + 1, upper + 1):
-            future_home_ball = df.iloc[j]["home_ball"]
-            if future_home_ball in [True, False] and future_home_ball != current_home_ball:
-                found_flip = True
-                break
-        if found_flip:
-            candidate_idx.append(i)
+        if possession_event.get("passOutcomeType") != "D":
+            continue
+        possession_event_id = event.get("possessionEventId")
+        if possession_event_id is None:
+            continue
+        candidates.append((int(possession_event_id), event))
 
-    if not candidate_idx:
-        raise ValueError(
-            f"No possession event in {sorted(target_possession_types)} found with opposite home_ball in the next 10 frames."
-        )
+    if not candidates:
+        raise ValueError("No pass with passOutcomeType='D' found in event json.")
 
     rng = random.Random(seed)
-    chosen_idx = rng.choice(candidate_idx)
+    return rng.choice(candidates)
 
+
+def _pick_window_around_possession_event(df: pd.DataFrame, possession_event_id: int, max_frames: int) -> pd.DataFrame:
+    matches = df.index[df["possession_event_id"] == possession_event_id].tolist()
+    if not matches:
+        raise ValueError(f"possession_event_id={possession_event_id} not found in tracking parquet.")
+
+    chosen_idx = matches[0]
     half = max_frames // 2
     start = max(0, chosen_idx - half)
     end = min(len(df), start + max_frames)
@@ -130,28 +138,6 @@ def _pick_window(
     subset = df.iloc[start:end].copy()
     if subset.empty:
         raise ValueError("Subset is empty after window selection.")
-
-    subset_valid = False
-    m = len(subset)
-    for i in range(m):
-        if subset.iloc[i]["possession_event_type"] not in target_possession_types:
-            continue
-        current_home_ball = subset.iloc[i]["home_ball"]
-        if current_home_ball not in [True, False]:
-            continue
-        upper = min(i + 10, m - 1)
-        for j in range(i + 1, upper + 1):
-            future_home_ball = subset.iloc[j]["home_ball"]
-            if future_home_ball in [True, False] and future_home_ball != current_home_ball:
-                subset_valid = True
-                break
-        if subset_valid:
-            break
-    if not subset_valid:
-        raise ValueError(
-            f"Chosen subset does not contain event in {sorted(target_possession_types)} with opposite home_ball in next 10 frames after clipping; try a different seed/parquet."
-        )
-
     return subset
 
 
@@ -249,12 +235,13 @@ def create_animation(subset: pd.DataFrame, output_video: Path, fps: int = 10):
 
 def build_subset(
     tracking_dir: Path,
+    event_dir: Path,
     parquet: str | None,
+    event_json: str | None,
     max_frames: int,
     output_csv: Path,
     output_video: Path,
     seed: int | None,
-    target_possession_types: set[str],
 ):
     if max_frames <= 0:
         raise ValueError("--max-frames must be > 0")
@@ -262,13 +249,26 @@ def build_subset(
     parquet_path = _resolve_parquet_path(tracking_dir=tracking_dir, parquet_arg=parquet)
     df = pd.read_parquet(parquet_path)
 
+    if event_json:
+        event_path = Path(event_json)
+    else:
+        event_path = event_dir / f"{parquet_path.stem}.json"
+    if not event_path.exists():
+        raise FileNotFoundError(f"Event json not found: {event_path}")
+
+    with open(event_path, "r", encoding="utf-8") as f:
+        events = json.load(f)
+    if not isinstance(events, list):
+        raise ValueError("Event json top-level must be a list.")
+
+    selected_possession_event_id, selected_event = _extract_d_pass_possession_id(events, seed)
+
     _validate_required_columns(df)
     df = _add_nested_columns(df)
-    subset = _pick_window(
+    subset = _pick_window_around_possession_event(
         df=df,
+        possession_event_id=selected_possession_event_id,
         max_frames=max_frames,
-        seed=seed,
-        target_possession_types=target_possession_types,
     )
 
     output_df = subset[OUTPUT_COLUMNS].copy()
@@ -276,6 +276,9 @@ def build_subset(
     saved_video = create_animation(subset=subset, output_video=output_video)
 
     print(f"Parquet used: {parquet_path}")
+    print(f"Event json used: {event_path}")
+    print(f"Selected D-pass gameEventId: {selected_event.get('gameEventId')}")
+    print(f"Selected D-pass possessionEventId: {selected_possession_event_id}")
     print(f"Subset frameNum range: {int(output_df['frameNum'].min())} -> {int(output_df['frameNum'].max())}")
     print(f"Rows exported: {len(output_df)}")
     print(f"Output CSV: {output_csv.resolve()}")
@@ -293,9 +296,20 @@ def parse_args():
         help="Directory containing tracking parquet files.",
     )
     parser.add_argument(
+        "--event-dir",
+        type=Path,
+        default=DEFAULT_EVENT_DIR,
+        help="Directory containing event json files.",
+    )
+    parser.add_argument(
         "--parquet",
         default=None,
         help="Optional explicit parquet file path. If omitted, first parquet in tracking-dir is used.",
+    )
+    parser.add_argument(
+        "--event-json",
+        default=None,
+        help="Optional explicit event json path. If omitted, <parquet_stem>.json in event-dir is used.",
     )
     parser.add_argument(
         "--max-frames",
@@ -321,12 +335,6 @@ def parse_args():
         default=None,
         help="Optional random seed for window selection among valid home_ball flips.",
     )
-    parser.add_argument(
-        "--possession-types",
-        nargs="+",
-        default=sorted(TARGET_POSSESSION_TYPES),
-        help="Possession event types to require (e.g., PA CH or BC).",
-    )
     return parser.parse_args()
 
 
@@ -334,12 +342,13 @@ def main():
     args = parse_args()
     build_subset(
         tracking_dir=args.tracking_dir,
+        event_dir=args.event_dir,
         parquet=args.parquet,
+        event_json=args.event_json,
         max_frames=args.max_frames,
         output_csv=args.output_csv,
         output_video=args.output_video,
         seed=args.seed,
-        target_possession_types={x.upper() for x in args.possession_types},
     )
 
 

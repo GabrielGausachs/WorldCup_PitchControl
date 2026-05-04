@@ -12,7 +12,7 @@ Instead of only counting recoveries, this analysis evaluates the **spatial value
 Recovery definition for this stage (pass-only recoveries):
 
 - Use only pass events from event data JSON.
-- A recovery is identified when `possession_event.passOutcomeType == "Defensive Interception"`.
+- A recovery is identified when `possession_event.passOutcomeType == "D"`.
 - Then compare `homeTeam` in that pass row vs. `homeTeam` in the row of the next `game_event_id`.
 - If those `homeTeam` values are different, mark that moment as a recovery.
 
