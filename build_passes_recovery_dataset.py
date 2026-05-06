@@ -12,6 +12,16 @@ def _safe_dict(value: Any) -> dict:
     return value if isinstance(value, dict) else {}
 
 
+def _extract_home_ball(game_event_obj: Any) -> Any:
+    game_event = _safe_dict(game_event_obj)
+    return game_event.get("home_ball", pd.NA)
+
+
+def _extract_team_name(game_event_obj: Any) -> Any:
+    game_event = _safe_dict(game_event_obj)
+    return game_event.get("team_name", pd.NA)
+
+
 def build_base_dataset(base_path: str) -> str:
     events_dir = os.path.join(base_path, "eventdata")
     output_dir = os.path.join(base_path, "dataset_passes_recovery")
@@ -71,12 +81,16 @@ def enrich_with_tracking(dataset_path: str, base_path: str) -> None:
     dataset["t0_startFrame_nextGameEvent"] = pd.NA
     dataset["periodElapsedTime_possessionEventId"] = pd.NA
     dataset["periodElapsedTime_t0_nextGameEvent"] = pd.NA
+    dataset["homeBall_possessionEventId"] = pd.NA
+    dataset["homeBall_t0_nextGameEvent"] = pd.NA
+    dataset["teamName_possessionEventId"] = pd.NA
+    dataset["teamName_t0_nextGameEvent"] = pd.NA
 
     for game_file_id, idxs in dataset.groupby("source_game_file").groups.items():
         tracking_path = os.path.join(base_path, "trackingdata_parquet", f"{game_file_id}.parquet")
         tracking_df = pd.read_parquet(
             tracking_path,
-            columns=["game_event_id", "possession_event_id", "frameNum", "periodElapsedTime"],
+            columns=["game_event_id", "possession_event_id", "frameNum", "periodElapsedTime", "game_event"],
         )
         tracking_df = tracking_df.sort_values("frameNum").reset_index(drop=True)
 
@@ -94,7 +108,10 @@ def enrich_with_tracking(dataset_path: str, base_path: str) -> None:
 
             pos_start_rows = pos_rows[pos_rows["frameNum"] == start_frame]
             if not pos_start_rows.empty:
-                dataset.at[idx, "periodElapsedTime_possessionEventId"] = pos_start_rows.iloc[0]["periodElapsedTime"]
+                pos_start_row = pos_start_rows.iloc[0]
+                dataset.at[idx, "periodElapsedTime_possessionEventId"] = pos_start_row["periodElapsedTime"]
+                dataset.at[idx, "homeBall_possessionEventId"] = _extract_home_ball(pos_start_row["game_event"])
+                dataset.at[idx, "teamName_possessionEventId"] = _extract_team_name(pos_start_row["game_event"])
 
             future_rows = tracking_df[tracking_df["frameNum"] >= start_frame]
             next_event_rows = future_rows[future_rows["game_event_id"] != game_event_id]
@@ -104,6 +121,8 @@ def enrich_with_tracking(dataset_path: str, base_path: str) -> None:
             t0_row = next_event_rows.iloc[0]
             dataset.at[idx, "t0_startFrame_nextGameEvent"] = int(t0_row["frameNum"])
             dataset.at[idx, "periodElapsedTime_t0_nextGameEvent"] = t0_row["periodElapsedTime"]
+            dataset.at[idx, "homeBall_t0_nextGameEvent"] = _extract_home_ball(t0_row["game_event"])
+            dataset.at[idx, "teamName_t0_nextGameEvent"] = _extract_team_name(t0_row["game_event"])
 
     dataset.to_csv(dataset_path, index=False)
     print(f"Enriched dataset saved: {dataset_path} ({len(dataset)} rows)")
