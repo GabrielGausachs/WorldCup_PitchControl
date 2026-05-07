@@ -159,3 +159,22 @@ def normalize_pitch_value_by_goal_distance(
         pitch_width=pitch_width,
     )
     return np.clip(pv_raw * factor, 0.0, 1.0)
+
+
+def get_grid(n_x=105, n_y=68, pitch_length=105.0, pitch_width=68.0):
+    x_coords = np.linspace(-pitch_length / 2.0, pitch_length / 2.0, n_x)
+    y_coords = np.linspace(-pitch_width / 2.0, pitch_width / 2.0, n_y)
+    return np.meshgrid(x_coords, y_coords, indexing="ij")
+
+
+def predict_surface(model, ball_x, ball_y, X, Y):
+    feats = np.column_stack(
+        [
+            np.full(X.size, ball_x, dtype=float),
+            np.full(Y.size, ball_y, dtype=float),
+            X.ravel(),
+            Y.ravel(),
+        ]
+    )
+    pred = model.predict(feats)
+    return np.clip(pred.reshape(X.shape), 0.0, 1.0)

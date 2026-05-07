@@ -132,9 +132,12 @@ def creation_pv_dataset_home_possession(tracking_df: pd.DataFrame, game) -> pd.D
 
     data_rows = []
     skipped_missing_frame = 0
-    skipped_invalid_possession = selection_stats["home_possession_rows"] - selection_stats["parsed_possession_rows"]
-    if skipped_invalid_possession < 0:
-        skipped_invalid_possession = selection_stats["input_rows"] - selection_stats["parsed_possession_rows"]
+    unparseable_possession_rows = (
+        selection_stats["input_rows"] - selection_stats["parsed_possession_rows"]
+    )
+    non_home_possession_rows = (
+        selection_stats["parsed_possession_rows"] - selection_stats["home_possession_rows"]
+    )
     skipped_no_away_ids = 0
     skipped_influence_error = 0
     skipped_invalid_influence_shape = 0
@@ -148,7 +151,8 @@ def creation_pv_dataset_home_possession(tracking_df: pd.DataFrame, game) -> pd.D
             f"input_rows={len(tracking_rows)}",
             "kept_frames=0",
             f"skipped_missing_frame={skipped_missing_frame}",
-            f"skipped_invalid_possession={skipped_invalid_possession}",
+            f"unparseable_possession_rows={unparseable_possession_rows}",
+            f"non_home_possession_rows={non_home_possession_rows}",
             f"skipped_no_away_ids={skipped_no_away_ids}",
             f"skipped_influence_error={skipped_influence_error}",
             f"skipped_invalid_influence_shape={skipped_invalid_influence_shape}",
@@ -203,7 +207,8 @@ def creation_pv_dataset_home_possession(tracking_df: pd.DataFrame, game) -> pd.D
         f"input_rows={len(tracking_rows)}",
         f"kept_frames={len(data_rows)}",
         f"skipped_missing_frame={skipped_missing_frame}",
-        f"skipped_invalid_possession={skipped_invalid_possession}",
+        f"unparseable_possession_rows={unparseable_possession_rows}",
+        f"non_home_possession_rows={non_home_possession_rows}",
         f"skipped_no_away_ids={skipped_no_away_ids}",
         f"skipped_influence_error={skipped_influence_error}",
         f"skipped_invalid_influence_shape={skipped_invalid_influence_shape}",

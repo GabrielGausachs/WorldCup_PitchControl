@@ -79,8 +79,8 @@ def enrich_with_tracking(dataset_path: str, base_path: str) -> None:
 
     dataset["startFrame_possessionEventId"] = pd.NA
     dataset["t0_startFrame_nextGameEvent"] = pd.NA
-    dataset["periodElapsedTime_possessionEventId"] = pd.NA
-    dataset["periodElapsedTime_t0_nextGameEvent"] = pd.NA
+    dataset["periodGameClockTime_possessionEventId"] = pd.NA
+    dataset["periodGameClockTime_t0_nextGameEvent"] = pd.NA
     dataset["homeBall_possessionEventId"] = pd.NA
     dataset["homeBall_t0_nextGameEvent"] = pd.NA
     dataset["teamName_possessionEventId"] = pd.NA
@@ -90,7 +90,7 @@ def enrich_with_tracking(dataset_path: str, base_path: str) -> None:
         tracking_path = os.path.join(base_path, "trackingdata_parquet", f"{game_file_id}.parquet")
         tracking_df = pd.read_parquet(
             tracking_path,
-            columns=["game_event_id", "possession_event_id", "frameNum", "periodElapsedTime", "game_event"],
+            columns=["game_event_id", "possession_event_id", "frameNum", "periodGameClockTime", "game_event"],
         )
         tracking_df = tracking_df.sort_values("frameNum").reset_index(drop=True)
 
@@ -109,7 +109,7 @@ def enrich_with_tracking(dataset_path: str, base_path: str) -> None:
             pos_start_rows = pos_rows[pos_rows["frameNum"] == start_frame]
             if not pos_start_rows.empty:
                 pos_start_row = pos_start_rows.iloc[0]
-                dataset.at[idx, "periodElapsedTime_possessionEventId"] = pos_start_row["periodElapsedTime"]
+                dataset.at[idx, "periodGameClockTime_possessionEventId"] = pos_start_row["periodGameClockTime"]
                 dataset.at[idx, "homeBall_possessionEventId"] = _extract_home_ball(pos_start_row["game_event"])
                 dataset.at[idx, "teamName_possessionEventId"] = _extract_team_name(pos_start_row["game_event"])
 
@@ -120,7 +120,7 @@ def enrich_with_tracking(dataset_path: str, base_path: str) -> None:
 
             t0_row = next_event_rows.iloc[0]
             dataset.at[idx, "t0_startFrame_nextGameEvent"] = int(t0_row["frameNum"])
-            dataset.at[idx, "periodElapsedTime_t0_nextGameEvent"] = t0_row["periodElapsedTime"]
+            dataset.at[idx, "periodGameClockTime_t0_nextGameEvent"] = t0_row["periodGameClockTime"]
             dataset.at[idx, "homeBall_t0_nextGameEvent"] = _extract_home_ball(t0_row["game_event"])
             dataset.at[idx, "teamName_t0_nextGameEvent"] = _extract_team_name(t0_row["game_event"])
 
@@ -130,7 +130,7 @@ def enrich_with_tracking(dataset_path: str, base_path: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Build D-pass dataset, then enrich with tracking-based start frame/t0/periodElapsedTime."
+        description="Build D-pass dataset, then enrich with tracking-based start frame/t0/periodGameClockTime."
     )
     parser.add_argument(
         "--base-path",

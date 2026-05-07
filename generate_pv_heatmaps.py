@@ -6,8 +6,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from Utils.config import DATA_ROOT
-from pv_goal_normalization import goal_distance_factor, normalize_pitch_value_by_goal_distance
-from pv_heatmap_plotting import draw_pitch, plot_heatmap
+from Utils.helpers import goal_distance_factor, normalize_pitch_value_by_goal_distance
+from Utils.visualizations import draw_pitch, plot_heatmap
 
 
 def get_grid(n_x=105, n_y=68, pitch_length=105.0, pitch_width=68.0):
