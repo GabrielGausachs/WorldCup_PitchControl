@@ -7,7 +7,7 @@ import warnings
 import numpy as np
 import pandas as pd
 
-from pitch_control_functions.pc_functions import get_team_influence
+from Utils.pc_functions import get_team_influence
 from Utils.loading import load_files, load_game_from_pff
 from Utils.config import DATA_ROOT
 
