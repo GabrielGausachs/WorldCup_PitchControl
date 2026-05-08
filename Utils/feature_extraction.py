@@ -60,7 +60,7 @@ def space_quality(
     frame_idx: int,
     home_team_in_possession: bool,
     base_path: str = DATA_ROOT,
-    model_rel_path: str = "processed_pitch_value/models/pv_mlp.pkl",
+    model_rel_path: str = "pitch_value_model/pv_mlp.pkl",
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     model_path = Path(base_path) / model_rel_path
     if not model_path.exists():
@@ -93,13 +93,15 @@ def space_quality(
     pc_home = _extract_home_pitch_control(pc_raw)
     pc_home = _resize_to_shape(pc_home, pv.shape)
 
-    # DataBallPy game object is fixed to home attacking left-to-right.
-    # Convert pitch control to attacking-team control in the same normalized frame.
+    # Convert DataBallPy home-control output to attacking-team control.
+    # Convention for this project:
+    # - Home possession: use pc_home directly.
+    # - Away possession: use 1 - pc_home.
+    # No spatial flipping is applied to pitch control arrays.
     if home_team_in_possession:
         pc_att = pc_home
     else:
         pc_att = 1.0 - pc_home
-        pc_att = pc_att[::-1, ::-1]
 
     sq = np.clip(pc_att * pv, 0.0, 1.0)
     return np.clip(pc_att, 0.0, 1.0), np.clip(pv, 0.0, 1.0), sq
