@@ -12,23 +12,41 @@ from Utils.loading import load_files, load_game_from_pff
 from Utils.config import DATA_ROOT
 
 
-def identify_defensive_situations(tracking_df):
-    tracking_df = tracking_df.copy()
-    tracking_df["team_in_possession"] = tracking_df["game_event"].apply(
-        lambda x: x.get("team_name") if isinstance(x, dict) else None
-    )
-    tracking_df["home_team_in_possession"] = tracking_df["game_event"].apply(
-        lambda x: x.get("home_team") if isinstance(x, dict) else None
-    )
+def _parse_bool_like(value):
+    if pd.isna(value):
+        return None
+    if isinstance(value, str):
+        v = value.strip().lower()
+        if v in {"1", "true", "t", "yes", "y"}:
+            return True
+        if v in {"0", "false", "f", "no", "n"}:
+            return False
+        return None
+    try:
+        return bool(int(value))
+    except Exception:
+        return None
 
-    tracking_team_not_null = tracking_df[tracking_df["team_in_possession"].notnull()].copy()
-    tracking_team_not_null["time_bin_3s"] = (tracking_team_not_null["periodGameClockTime"] // 3).astype(int)
-    tracking_rows = (
-        tracking_team_not_null.sort_values(["period", "periodGameClockTime"])
-        .groupby(["period", "time_bin_3s"])
-        .first()
-        .reset_index()
-    )
+
+def identify_home_possession_situations(tracking_df: pd.DataFrame):
+    df = tracking_df.copy()
+    n_input_rows = len(df)
+    invalid_tracking_entities = 0
+
+    def _extract_home_team(x):
+        if isinstance(x, dict):
+            return x.get("home_team")
+        return None
+
+    df["home_team_in_possession_raw"] = df["game_event"].apply(_extract_home_team)
+    df["home_team_in_possession"] = df["home_team_in_possession_raw"].apply(_parse_bool_like)
+
+    parsed_mask = df["home_team_in_possession"].notnull()
+    n_parsed_possession_rows = int(parsed_mask.sum())
+    parsed_df = df[parsed_mask].copy()
+
+    home_pos_df = parsed_df[parsed_df["home_team_in_possession"]].copy()
+    n_home_possession_rows = len(home_pos_df)
 
     def valid_ball(x):
         if not isinstance(x, dict):
@@ -49,13 +67,33 @@ def identify_defensive_situations(tracking_df):
                 return False
         return True
 
-    tracking_rows = tracking_rows[
-        (tracking_rows["ballsSmoothed"].apply(valid_ball))
-        & (tracking_rows["homePlayersSmoothed"].apply(valid_players))
-        & (tracking_rows["awayPlayersSmoothed"].apply(valid_players))
-    ].copy()
+    # Validate entities before time binning.
+    valid_mask = (
+        home_pos_df["ballsSmoothed"].apply(valid_ball)
+        & home_pos_df["homePlayersSmoothed"].apply(valid_players)
+        & home_pos_df["awayPlayersSmoothed"].apply(valid_players)
+    )
+    invalid_tracking_entities = int((~valid_mask).sum())
+    valid_home_pos_df = home_pos_df[valid_mask].copy()
 
-    return tracking_rows
+    # Keep one frame per 3-second bin after validity filtering.
+    valid_home_pos_df["time_bin_3s"] = (valid_home_pos_df["periodGameClockTime"] // 3).astype(int)
+    rows = (
+        valid_home_pos_df.sort_values(["period", "periodGameClockTime"])
+        .groupby(["period", "time_bin_3s"])
+        .first()
+        .reset_index()
+    )
+
+    stats = {
+        "input_rows": int(n_input_rows),
+        "parsed_possession_rows": int(n_parsed_possession_rows),
+        "home_possession_rows": int(n_home_possession_rows),
+        "kept_rows_after_validity": int(len(valid_home_pos_df)),
+        "binned_rows_3s": int(len(rows)),
+        "invalid_tracking_entities": int(invalid_tracking_entities),
+    }
+    return rows, stats
 
 
 def get_grid_centers(n_x=21, n_y=15, pitch_length=105, pitch_width=68):
@@ -78,18 +116,51 @@ def _get_team_column_ids(game):
     return home_col_ids, away_col_ids
 
 
-def creation_pv_dataset(tracking_df: pd.DataFrame, game) -> pd.DataFrame:
+def creation_pv_dataset_home_possession(tracking_df: pd.DataFrame, game) -> pd.DataFrame:
     X, Y = get_grid(21, 15, game.pitch_dimensions[0], game.pitch_dimensions[1])
-    home_col_ids, away_col_ids = _get_team_column_ids(game)
+    _, away_col_ids = _get_team_column_ids(game)
 
-    tracking_rows = identify_defensive_situations(tracking_df)
-    print(f"identify_defensive_situations returned {len(tracking_rows)} tracking rows")
+    tracking_rows, selection_stats = identify_home_possession_situations(tracking_df)
+    print("Selection summary:")
+    print(
+        f"input_rows={selection_stats['input_rows']} "
+        f"parsed_possession_rows={selection_stats['parsed_possession_rows']} "
+        f"home_possession_rows={selection_stats['home_possession_rows']} "
+        f"binned_rows_3s={selection_stats['binned_rows_3s']} "
+        f"kept_rows_after_validity={selection_stats['kept_rows_after_validity']}"
+    )
+
     data_rows = []
     skipped_missing_frame = 0
-    skipped_non_bool_possession = 0
-    skipped_no_defending_ids = 0
+    unparseable_possession_rows = (
+        selection_stats["input_rows"] - selection_stats["parsed_possession_rows"]
+    )
+    non_home_possession_rows = (
+        selection_stats["parsed_possession_rows"] - selection_stats["home_possession_rows"]
+    )
+    skipped_no_away_ids = 0
     skipped_influence_error = 0
     skipped_invalid_influence_shape = 0
+    skipped_invalid_tracking_entities = selection_stats["invalid_tracking_entities"]
+
+    if len(away_col_ids) == 0:
+        print("WARNING: No away player column IDs found. Returning empty dataset.")
+        skipped_no_away_ids = len(tracking_rows)
+        print(
+            "Frame processing summary:",
+            f"input_rows={len(tracking_rows)}",
+            "kept_frames=0",
+            f"skipped_missing_frame={skipped_missing_frame}",
+            f"unparseable_possession_rows={unparseable_possession_rows}",
+            f"non_home_possession_rows={non_home_possession_rows}",
+            f"skipped_no_away_ids={skipped_no_away_ids}",
+            f"skipped_influence_error={skipped_influence_error}",
+            f"skipped_invalid_influence_shape={skipped_invalid_influence_shape}",
+            f"skipped_invalid_tracking_entities={skipped_invalid_tracking_entities}",
+        )
+        return pd.DataFrame(
+            columns=["game_id", "frameNum", "ball_x", "ball_y", "cell_x", "cell_y", "defending_value"]
+        )
 
     for _, row in tracking_rows.iterrows():
         frame_num = row["frameNum"]
@@ -100,34 +171,8 @@ def creation_pv_dataset(tracking_df: pd.DataFrame, game) -> pd.DataFrame:
 
         frame = game.tracking_data.loc[idx[0]]
 
-        home_team_in_possession_raw = row["home_team_in_possession"]
-        if pd.isna(home_team_in_possession_raw):
-            skipped_non_bool_possession += 1
-            continue
         try:
-            if isinstance(home_team_in_possession_raw, str):
-                value = home_team_in_possession_raw.strip().lower()
-                if value in {"1", "true", "t", "yes", "y"}:
-                    home_team_in_possession = True
-                elif value in {"0", "false", "f", "no", "n"}:
-                    home_team_in_possession = False
-                else:
-                    skipped_non_bool_possession += 1
-                    continue
-            else:
-                home_team_in_possession = bool(int(home_team_in_possession_raw))
-        except Exception:
-            skipped_non_bool_possession += 1
-            continue
-
-        defenders_are_home = not home_team_in_possession
-        defending_col_ids = home_col_ids if defenders_are_home else away_col_ids
-        if len(defending_col_ids) == 0:
-            skipped_no_defending_ids += 1
-            continue
-
-        try:
-            team_influence = get_team_influence(frame=frame, col_ids=defending_col_ids, grid=[X, Y])
+            team_influence = get_team_influence(frame=frame, col_ids=away_col_ids, grid=[X, Y])
         except Exception:
             skipped_influence_error += 1
             continue
@@ -135,27 +180,14 @@ def creation_pv_dataset(tracking_df: pd.DataFrame, game) -> pd.DataFrame:
         if not isinstance(team_influence, np.ndarray) or team_influence.ndim != 2:
             skipped_invalid_influence_shape += 1
             continue
-        
+
         defending_value = np.clip(team_influence, 0.0, 1.0)
 
         ball_x = row["ballsSmoothed"]["x"]
         ball_y = row["ballsSmoothed"]["y"]
-        X_frame = X
-        Y_frame = Y
-        V_frame = defending_value
-
-        # Home team always attacks left-to-right in this game object.
-        # So if defenders are home team, flip to normalize possessions to left-to-right attacking.
-        if defenders_are_home:
-            ball_x = -ball_x
-            ball_y = -ball_y
-            X_frame = -X_frame
-            Y_frame = -Y_frame
-            V_frame = defending_value[::-1, ::-1]
-
-        X_flat = X_frame.ravel()
-        Y_flat = Y_frame.ravel()
-        V_flat = V_frame.ravel()
+        X_flat = X.ravel()
+        Y_flat = Y.ravel()
+        V_flat = defending_value.ravel()
 
         df_frame = pd.DataFrame(
             {
@@ -175,10 +207,12 @@ def creation_pv_dataset(tracking_df: pd.DataFrame, game) -> pd.DataFrame:
         f"input_rows={len(tracking_rows)}",
         f"kept_frames={len(data_rows)}",
         f"skipped_missing_frame={skipped_missing_frame}",
-        f"skipped_non_bool_possession={skipped_non_bool_possession}",
-        f"skipped_no_defending_ids={skipped_no_defending_ids}",
+        f"unparseable_possession_rows={unparseable_possession_rows}",
+        f"non_home_possession_rows={non_home_possession_rows}",
+        f"skipped_no_away_ids={skipped_no_away_ids}",
         f"skipped_influence_error={skipped_influence_error}",
         f"skipped_invalid_influence_shape={skipped_invalid_influence_shape}",
+        f"skipped_invalid_tracking_entities={skipped_invalid_tracking_entities}",
     )
 
     if not data_rows:
@@ -188,7 +222,10 @@ def creation_pv_dataset(tracking_df: pd.DataFrame, game) -> pd.DataFrame:
         )
 
     dataset = pd.concat(data_rows, ignore_index=True)
-    print(f"Dataset created with {len(dataset)} rows and {dataset['frameNum'].nunique()} unique frames.")
+    print(
+        f"Dataset created with {len(dataset)} rows and "
+        f"{dataset['frameNum'].nunique()} unique frames."
+    )
     return dataset
 
 
@@ -222,19 +259,20 @@ def build_pv_datasets_for_all_games(
                 print(f"Skipping game {game_id} due to load warnings ({len(caught_warnings)} warnings).")
                 print("-" * 50)
                 continue
-            _, tracking_df = load_files(base_path, game_id)
-            dataset = creation_pv_dataset(tracking_df, game)
 
-            total_frames += len(dataset["frameNum"].unique())
-            total_rows += len(dataset)
+            _, tracking_df = load_files(base_path, game_id)
+            dataset = creation_pv_dataset_home_possession(tracking_df, game)
+
+            game_frames = int(dataset["frameNum"].nunique()) if not dataset.empty else 0
+            game_rows = int(len(dataset))
+            total_frames += game_frames
+            total_rows += game_rows
             processed_games += 1
 
-            dataset.to_csv(
-                os.path.join(output_dir, f"dataset_{game_id}.csv"), index=False
-            )
-            if dataset.empty:
-                print(f"WARNING: Dataset for game {game_id} is empty (header only).")
-            print(f"Dataset for game {game_id} saved with {len(dataset)} rows.")
+            out_path = os.path.join(output_dir, f"dataset_{game_id}.csv")
+            dataset.to_csv(out_path, index=False)
+            print(f"Saved: {out_path}")
+            print(f"Game {game_id} totals: frames_saved={game_frames}, rows_saved={game_rows}")
         except Exception as e:
             failed_games.append(game_id)
             print(f"Failed game {game_id}: {e}")
@@ -249,7 +287,6 @@ def build_pv_datasets_for_all_games(
     print(f"Warning-skipped games: {warning_games}")
     print(f"Failed games count: {len(failed_games)}")
     print(f"Failed games: {failed_games}")
-
     return total_frames, total_rows, failed_games
 
 
@@ -259,19 +296,22 @@ def _build_pv_dataset_for_single_game(base_path: str, game_id: str) -> tuple[int
 
     _, tracking_df = load_files(base_path, game_id)
     game = load_game_from_pff(base_path, game_id)
-    dataset = creation_pv_dataset(tracking_df, game)
-    dataset.to_csv(os.path.join(output_dir, f"dataset_{game_id}.csv"), index=False)
+    dataset = creation_pv_dataset_home_possession(tracking_df, game)
 
-    total_frames = len(dataset["frameNum"].unique())
-    total_rows = len(dataset)
-    print(f"Dataset for game {game_id} saved.")
-    print(f"Total frames processed: {total_frames}")
-    print(f"Total rows in dataset: {total_rows}")
+    out_path = os.path.join(output_dir, f"dataset_{game_id}.csv")
+    dataset.to_csv(out_path, index=False)
+
+    total_frames = int(dataset["frameNum"].nunique()) if not dataset.empty else 0
+    total_rows = int(len(dataset))
+    print(f"Saved: {out_path}")
+    print(f"Game {game_id} totals: frames_saved={total_frames}, rows_saved={total_rows}")
     return total_frames, total_rows
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Build pitch-value datasets from tracking data.")
+    parser = argparse.ArgumentParser(
+        description="Build home-possession-only pitch-value datasets from tracking data."
+    )
     parser.add_argument(
         "--base-path",
         default=DATA_ROOT,

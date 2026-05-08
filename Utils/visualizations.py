@@ -60,7 +60,7 @@ def _render_base_heatmap(
         alpha=alpha,
         zorder=2,
     )
-    ax.set_title(title)
+    # Intentionally keep export minimal: no title text.
     ax.set_aspect("equal", adjustable="box")
     ax.set_axis_off()
     return heat
@@ -219,13 +219,6 @@ def save_space_quality_heatmaps(
     y = np.linspace(-pitch_width / 2.0, pitch_width / 2.0, pitch_control.shape[1])
     X, Y = np.meshgrid(x, y, indexing="ij")
 
-    pv_vmax = float(np.nanmax(pitch_value)) if np.isfinite(np.nanmax(pitch_value)) else 1.0
-    if pv_vmax <= 0:
-        pv_vmax = 1.0
-    sq_vmax = float(np.nanmax(space_quality)) if np.isfinite(np.nanmax(space_quality)) else 1.0
-    if sq_vmax <= 0:
-        sq_vmax = 1.0
-
     specs = [
         (
             "pitch_control",
@@ -239,17 +232,17 @@ def save_space_quality_heatmaps(
             "pitch_value",
             "Pitch Value",
             pitch_value,
-            LinearSegmentedColormap.from_list("pv_gy", ["#1a9850", "#ffff66"]),
-            Normalize(vmin=0.0, vmax=pv_vmax),
+            "viridis",
+            Normalize(vmin=0.0, vmax=1.0),
             "white",
         ),
         (
             "space_quality",
             "Space Quality",
             space_quality,
-            LinearSegmentedColormap.from_list("sq_rg", ["#d73027", "#1a9850"]),
-            Normalize(vmin=0.0, vmax=sq_vmax),
-            "white",
+            "YlGn",
+            Normalize(vmin=0.0, vmax=1.0),
+            "black",
         ),
     ]
     saved_files: list[Path] = []
@@ -291,11 +284,10 @@ def save_space_quality_heatmaps(
                 home_team_in_possession=home_team_in_possession,
             )
 
-        fig.colorbar(heat, ax=ax, fraction=0.03, pad=0.02)
-        fig.tight_layout()
+        fig.subplots_adjust(left=0, right=1, bottom=0, top=1)
 
         file_path = out_path / f"{prefix}_{suffix}.png"
-        fig.savefig(file_path, dpi=200)
+        fig.savefig(file_path, dpi=200, bbox_inches="tight", pad_inches=0)
         plt.close(fig)
         saved_files.append(file_path)
 

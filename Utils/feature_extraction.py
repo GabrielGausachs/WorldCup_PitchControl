@@ -31,23 +31,6 @@ def _predict_pitch_value_surface(model, ball_x: float, ball_y: float, X: np.ndar
     return np.clip(pred.reshape(X.shape), 0.0, 1.0)
 
 
-def _extract_home_pitch_control(pitch_control_raw) -> np.ndarray:
-    pc = np.asarray(pitch_control_raw)
-    if pc.ndim == 4:
-        # Expected: [frames, teams, x, y] or [frames, teams, y, x]
-        pc = pc[0, 0]
-    elif pc.ndim == 3:
-        # Expected: [frames, x, y] or [teams, x, y]
-        pc = pc[0]
-    elif pc.ndim != 2:
-        raise ValueError(f"Unsupported pitch-control shape: {pc.shape}")
-
-    # Ensure orientation [x, y] to match PV grid.
-    if pc.shape[0] < pc.shape[1]:
-        pc = pc.T
-    return np.clip(pc, 0.0, 1.0)
-
-
 def _resize_to_shape(arr: np.ndarray, target_shape: tuple[int, int]) -> np.ndarray:
     if arr.shape == target_shape:
         return arr
@@ -94,18 +77,26 @@ def space_quality(
         frame_idx,
         frame_idx,
     )
-    pc_home = _extract_home_pitch_control(pc_raw)
-    pc_home = _resize_to_shape(pc_home, pv.shape)
+    pc_arr = np.asarray(pc_raw)
+    # Expected current format from DataBallPy: [n_frames, y, x], e.g. (101, 68, 106)
+    if pc_arr.ndim == 3:
+        pc_home = pc_arr[0]
+    elif pc_arr.ndim == 2:
+        pc_home = pc_arr
+    else:
+        raise ValueError(f"Unsupported pitch-control shape: {pc_arr.shape}")
 
-    # Convert DataBallPy home-control output to attacking-team control.
-    # Convention for this project:
-    # - Home possession: use pc_home directly.
-    # - Away possession: use 1 - pc_home.
-    # No spatial flipping is applied to pitch control arrays.
+    # Convert [y, x] to [x, y] to align with PV grid.
+    pc_home = pc_home.T
+    pc_home = _resize_to_shape(pc_home, pv.shape)
+    # Empirical alignment with project convention:
+    # 1.0 should indicate high home-team control, 0.0 high away-team control.
+    pc_home = 1.0 - pc_home
+
     if home_team_in_possession:
         pc_att = pc_home
     else:
         pc_att = 1.0 - pc_home
 
     sq = np.clip(pc_att * pv, 0.0, 1.0)
-    return np.clip(pc_att, 0.0, 1.0), np.clip(pv, 0.0, 1.0), sq
+    return pc_att, pv, sq

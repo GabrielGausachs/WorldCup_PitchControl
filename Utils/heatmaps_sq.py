@@ -12,6 +12,11 @@ from Utils.feature_extraction import space_quality
 from Utils.loading import load_game_from_pff
 from Utils.visualizations import save_space_quality_heatmaps
 
+HOME_TEAM_COLOR = "#225ea8"
+AWAY_TEAM_COLOR = "#cb181d"
+BALL_COLOR = "#ffffff"
+BALL_EDGE_COLOR = "#000000"
+
 
 def _parse_bool_like(value) -> bool:
     if isinstance(value, (bool, np.bool_)):
@@ -61,6 +66,18 @@ def run_random_space_quality_analysis(
         raise ValueError(f"Frame {frame_num} not found in game {game_id}.")
     frame_idx = int(idx[0])
     frame_row = game.tracking_data.loc[frame_idx]
+
+    possession_team = row["teamName"] if "teamName" in row.index else None
+    next_event_team = row["teamName_t0_nextGameEvent"] if "teamName_t0_nextGameEvent" in row.index else None
+    print("Selected sample for SQ heatmaps:")
+    print(f"- game_id: {game_id}")
+    print(f"- frame_num: {frame_num}")
+    print(f"- home_team_in_possession: {home_ball}")
+    print(f"- possession_team_at_frame: {possession_team}")
+    print(f"- next_event_team: {next_event_team}")
+    print("Heatmap overlay color mapping:")
+    print(f"- ball fill: {BALL_COLOR}")
+    print(f"- ball edge: {BALL_EDGE_COLOR}")
 
     pc, pv, sq = space_quality(
         frame_row=frame_row,
