@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import random
 from pathlib import Path
 
@@ -32,7 +33,7 @@ def run_random_space_quality_analysis(
     seed: int = 42,
     output_dir: str = "Outputs",
 ) -> dict:
-    required = {"source_game_file", "startFrame_possessionEventId", "homeBall_possessionEventId"}
+    required = {"source_game_file", "startFrame_possessionEventId", "homeTeam"}
     missing = required - set(dataset_recovery.columns)
     if missing:
         raise ValueError(f"dataset_recovery missing required columns: {sorted(missing)}")
@@ -40,13 +41,19 @@ def run_random_space_quality_analysis(
     if dataset_recovery.empty:
         raise ValueError("dataset_recovery is empty.")
 
+    valid_rows = dataset_recovery.dropna(subset=["source_game_file", "startFrame_possessionEventId", "homeTeam"]).copy()
+    valid_rows["homeTeam_bool"] = valid_rows["homeTeam"].apply(_parse_bool_like)
+    valid_rows = valid_rows[valid_rows["homeTeam_bool"]]
+    if valid_rows.empty:
+        raise ValueError("No valid home-team rows with non-null source_game_file/startFrame_possessionEventId/homeTeam.")
+
     rng = random.Random(seed)
-    sample_idx = rng.choice(dataset_recovery.index.tolist())
-    row = dataset_recovery.loc[sample_idx]
+    sample_idx = rng.choice(valid_rows.index.tolist())
+    row = valid_rows.loc[sample_idx]
 
     game_id = str(row["source_game_file"])
     frame_num = int(row["startFrame_possessionEventId"])
-    home_ball = _parse_bool_like(row["homeBall_possessionEventId"])
+    home_ball = True
 
     game = load_game_from_pff(base_path, game_id)
     idx = game.tracking_data.index[game.tracking_data["frame"] == frame_num]
@@ -85,3 +92,52 @@ def run_random_space_quality_analysis(
         "saved_files": [str(Path(p)) for p in files],
         "shape": pc.shape,
     }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Generate PC/PV/SQ heatmaps for one random home-team recovery event."
+    )
+    parser.add_argument(
+        "--dataset-path",
+        default=None,
+        help="Optional full path to dataset_recovery CSV. Defaults to DATA_ROOT/dataset_passes_recovery/dataset_passes_recovery_all_matches.csv",
+    )
+    parser.add_argument(
+        "--base-path",
+        default=DATA_ROOT,
+        help="Data root containing metadata/rosters/tracking files (default: DATA_ROOT).",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed for selecting one recovery row.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        default="Outputs",
+        help="Directory where heatmaps are saved.",
+    )
+    args = parser.parse_args()
+
+    dataset_path = args.dataset_path
+    if dataset_path is None:
+        dataset_path = str(
+            Path(args.base_path)
+            / "dataset_passes_recovery"
+            / "dataset_passes_recovery_all_matches.csv"
+        )
+
+    dataset_recovery = pd.read_csv(dataset_path)
+    result = run_random_space_quality_analysis(
+        dataset_recovery=dataset_recovery,
+        base_path=args.base_path,
+        seed=args.seed,
+        output_dir=args.output_dir,
+    )
+    print(result)
+
+
+if __name__ == "__main__":
+    main()

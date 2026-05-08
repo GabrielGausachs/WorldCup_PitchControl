@@ -9,6 +9,8 @@ from Utils.config import DATA_ROOT
 from Utils.helpers import goal_distance_factor, normalize_pitch_value_by_goal_distance
 from Utils.visualizations import draw_pitch, plot_heatmap
 
+REPO_ROOT = Path(__file__).resolve().parent
+
 
 def get_grid(n_x=105, n_y=68, pitch_length=105.0, pitch_width=68.0):
     x_coords = np.linspace(-pitch_length / 2.0, pitch_length / 2.0, n_x)
@@ -66,7 +68,7 @@ def save_heatmap(
 
 
 def generate_heatmaps(base_path, output_dir, n_x=105, n_y=68, pitch_length=105.0, pitch_width=68.0):
-    model_path = Path(base_path) / "processed_pitch_value" / "models" / "pv_mlp.pkl"
+    model_path = Path(base_path) / "pitch_value_model" / "models" / "pv_mlp.pkl"
     if not model_path.exists():
         raise FileNotFoundError(f"Model not found: {model_path}")
 
@@ -140,7 +142,11 @@ def generate_heatmaps(base_path, output_dir, n_x=105, n_y=68, pitch_length=105.0
 
 def main():
     parser = argparse.ArgumentParser(description="Generate paper-style PV heatmaps.")
-    parser.add_argument("--base-path", default=DATA_ROOT, help="Root path containing processed_pitch_value/models.")
+    parser.add_argument(
+        "--base-path",
+        default=str(REPO_ROOT),
+        help="Repository root path containing pitch_value_model.",
+    )
     parser.add_argument("--output-dir", default="Outputs", help="Folder to save heatmap PNGs.")
     parser.add_argument("--grid-x", type=int, default=105, help="Number of x coordinates for inference grid.")
     parser.add_argument("--grid-y", type=int, default=68, help="Number of y coordinates for inference grid.")

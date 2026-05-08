@@ -14,6 +14,8 @@ from Utils.helpers import (
     predict_surface,
 )
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
 
 PV_PAPER_CMAP = LinearSegmentedColormap.from_list(
     "pv_paper_style",
@@ -134,14 +136,14 @@ def save_heatmaps(
 
 
 def generate_heatmaps(
-    base_path=DATA_ROOT,
+    base_path=REPO_ROOT,
     output_dir="Outputs",
     n_x=105,
     n_y=68,
     pitch_length=105.0,
     pitch_width=68.0,
 ):
-    model_path = Path(base_path) / "processed_pitch_value" / "models" / "pv_mlp.pkl"
+    model_path = Path(base_path) / "pitch_value_model" / "models" / "pv_mlp.pkl"
     if not model_path.exists():
         raise FileNotFoundError(f"Model not found: {model_path}")
 

@@ -7,6 +7,8 @@ import numpy as np
 
 from Utils.config import DATA_ROOT
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
 
 def _build_meter_grid(pitch_length: float, pitch_width: float) -> tuple[np.ndarray, np.ndarray]:
     n_x = int(round(pitch_length))
@@ -60,9 +62,11 @@ def space_quality(
     frame_idx: int,
     home_team_in_possession: bool,
     base_path: str = DATA_ROOT,
-    model_rel_path: str = "pitch_value_model/pv_mlp.pkl",
+    model_rel_path: str = "pitch_value_model/models/pv_mlp.pkl",
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    model_path = Path(base_path) / model_rel_path
+    model_path = Path(model_rel_path)
+    if not model_path.is_absolute():
+        model_path = REPO_ROOT / model_path
     if not model_path.exists():
         raise FileNotFoundError(f"PV model not found: {model_path}")
 
