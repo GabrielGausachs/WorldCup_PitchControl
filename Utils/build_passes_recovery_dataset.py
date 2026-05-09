@@ -7,6 +7,7 @@ import pandas as pd
 
 from Utils.config import DATA_ROOT
 
+MAX_RECOVERY_GAP_SECONDS = 15.0
 
 def _safe_dict(value: Any) -> dict:
     return value if isinstance(value, dict) else {}
@@ -149,6 +150,22 @@ def enrich_with_tracking(dataset_path: str, base_path: str) -> None:
         & (dataset["teamName"] != dataset["teamName_t0_nextGameEvent"])
         & (dataset["homeTeam"].notna())
         & (dataset["homeBall_t0_nextGameEvent"].notna())
+    ].copy()
+
+    # Keep only recoveries where the next game event happens quickly enough.
+    dataset["periodGameClockTime_possessionEventId"] = pd.to_numeric(
+        dataset["periodGameClockTime_possessionEventId"], errors="coerce"
+    )
+    dataset["periodGameClockTime_t0_nextGameEvent"] = pd.to_numeric(
+        dataset["periodGameClockTime_t0_nextGameEvent"], errors="coerce"
+    )
+    dataset["delta_seconds_to_next_game_event"] = (
+        dataset["periodGameClockTime_t0_nextGameEvent"]
+        - dataset["periodGameClockTime_possessionEventId"]
+    )
+    dataset = dataset[
+        dataset["delta_seconds_to_next_game_event"].notna()
+        & (dataset["delta_seconds_to_next_game_event"] < MAX_RECOVERY_GAP_SECONDS)
     ].copy()
 
     dataset.to_csv(dataset_path, index=False)

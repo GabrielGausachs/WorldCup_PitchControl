@@ -59,16 +59,18 @@ def space_quality(
     ball_x_raw = float(frame_row["ball_x"])
     ball_y_raw = float(frame_row["ball_y"])
 
-    # Normalize frame context first: always model attacking left-to-right.
-    if home_team_in_possession:
-        ball_x = ball_x_raw
-        ball_y = ball_y_raw
-    else:
-        ball_x = -ball_x_raw
-        ball_y = -ball_y_raw
-
     model = joblib.load(model_path)
-    pv = _predict_pitch_value_surface(model=model, ball_x=ball_x, ball_y=ball_y, X=X, Y=Y)
+    pv = _predict_pitch_value_surface(
+        model=model,
+        ball_x=ball_x_raw,
+        ball_y=ball_y_raw,
+        X=X,
+        Y=Y,
+    )
+    # For away-team possession, keep ball coordinates as-is for inference and
+    # mirror the predicted surface to represent attacking left-to-right.
+    if not home_team_in_possession:
+        pv = np.flip(pv, axis=(0, 1))
 
     pc_raw = game.tracking_data.get_pitch_control(
         game.pitch_dimensions,
