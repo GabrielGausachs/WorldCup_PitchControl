@@ -1,5 +1,6 @@
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 from matplotlib.colors import LinearSegmentedColormap
 from mplsoccer import Pitch
 from pathlib import Path
@@ -373,3 +374,95 @@ def _plot_players_and_ball(
                 linewidths=0.7,
                 zorder=10,
             )
+
+
+def _apply_recovery_plot_style() -> None:
+    plt.rcParams.update(
+        {
+            "font.family": "DejaVu Sans",
+            "font.size": 11,
+            "axes.titlesize": 15,
+            "axes.titleweight": "bold",
+            "axes.labelsize": 12,
+            "xtick.labelsize": 10,
+            "ytick.labelsize": 10,
+        }
+    )
+
+
+def plot_team_avg_recovery_gain(df_plot: pd.DataFrame, out_path: str) -> None:
+    _apply_recovery_plot_style()
+    fig, ax = plt.subplots(figsize=(10, 6), facecolor="#f5f1e6")
+    ax.set_facecolor("#f5f1e6")
+
+    ax.barh(
+        df_plot["teamName_t0_nextGameEvent"],
+        df_plot["avg_recovery_space_gain_r20"],
+        color="#4c72b0",
+        alpha=0.9,
+        edgecolor="black",
+        linewidth=0.4,
+    )
+    ax.invert_yaxis()
+    ax.set_title("Average Recovery Space Gain (R20)")
+    ax.set_xlabel("Average Recovery Space Gain")
+    ax.set_ylabel("Team")
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.grid(False)
+
+    fig.savefig(out_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_team_space_quality_curve(df_plot: pd.DataFrame, out_path: str) -> None:
+    _apply_recovery_plot_style()
+    fig, ax = plt.subplots(figsize=(10, 6), facecolor="#f5f1e6")
+    ax.set_facecolor("#f5f1e6")
+
+    for team, team_df in df_plot.groupby("teamName_t0_nextGameEvent", dropna=False):
+        team_curve = team_df.sort_values("second_bin")
+        ax.plot(
+            team_curve["second_bin"],
+            team_curve["avg_sq_mean_r20"],
+            linewidth=1.8,
+            alpha=0.9,
+            label=str(team),
+        )
+
+    ax.set_title("Space Quality Curve After Recovery (R20)")
+    ax.set_xlabel("Seconds Since Recovery")
+    ax.set_ylabel("Average Space Quality")
+    ax.set_xticks([0, 1, 2, 3, 4, 5])
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.grid(False)
+    ax.legend(fontsize=8, frameon=False, ncol=2)
+
+    fig.savefig(out_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_team_positive_rate(df_plot: pd.DataFrame, out_path: str) -> None:
+    _apply_recovery_plot_style()
+    fig, ax = plt.subplots(figsize=(10, 6), facecolor="#f5f1e6")
+    ax.set_facecolor("#f5f1e6")
+
+    ax.barh(
+        df_plot["teamName_t0_nextGameEvent"],
+        df_plot["positive_exploitation_rate_pct"],
+        color="#55a868",
+        alpha=0.9,
+        edgecolor="black",
+        linewidth=0.4,
+    )
+    ax.invert_yaxis()
+    ax.set_title("Positive Exploitation Rate (R20)")
+    ax.set_xlabel("Positive Exploitation Rate (%)")
+    ax.set_ylabel("Team")
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.grid(False)
+
+    fig.savefig(out_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
