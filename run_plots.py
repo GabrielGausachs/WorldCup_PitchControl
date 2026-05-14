@@ -1,4 +1,5 @@
 import os
+import argparse
 from pathlib import Path
 
 import numpy as np
@@ -7,7 +8,7 @@ import pandas as pd
 from Utils.config import DATA_ROOT
 from Utils.visualizations import (
     plot_team_avg_recovery_gain,
-    plot_team_positive_rate,
+    plot_team_positive_count_vs_avg_positive_gain,
     plot_team_space_quality_curve,
 )
 
@@ -126,20 +127,47 @@ def run_plot_3_positive_exploitation_rate(df: pd.DataFrame, output_dir: Path) ->
         raise ValueError("Plot 3 has no valid rows after filtering.")
 
     dedup["positive_gain"] = dedup["recovery_space_gain_r20"] > 0.0
-    agg = (
-        dedup.groupby("teamName_t0_nextGameEvent", dropna=False)["positive_gain"]
-        .mean()
-        .mul(100.0)
-        .reset_index(name="positive_exploitation_rate_pct")
-        .sort_values("positive_exploitation_rate_pct", ascending=False)
+    positive = dedup[dedup["positive_gain"]].copy()
+    if positive.empty:
+        raise ValueError("Plot 3 has no positive-gain recoveries after filtering.")
+    positive_agg = (
+        positive.groupby("teamName_t0_nextGameEvent", dropna=False)["recovery_space_gain_r20"]
+        .agg(
+            n_positive_recoveries="count",
+            avg_positive_recovery_space_gain_r20="mean",
+        )
+        .reset_index()
     )
-    plot_team_positive_rate(
+    total_agg = (
+        dedup.groupby("teamName_t0_nextGameEvent", dropna=False)["recovery_key"]
+        .count()
+        .reset_index(name="n_total_recoveries")
+    )
+    agg = positive_agg.merge(total_agg, on="teamName_t0_nextGameEvent", how="left")
+    agg["positive_recovery_rate_pct"] = (
+        agg["n_positive_recoveries"] / agg["n_total_recoveries"] * 100.0
+    )
+    agg = agg.sort_values(
+        ["positive_recovery_rate_pct", "avg_positive_recovery_space_gain_r20"],
+        ascending=False,
+    )
+    plot_team_positive_count_vs_avg_positive_gain(
         agg,
-        str(output_dir / "plot3_positive_exploitation_rate_r20.png"),
+        str(output_dir / "plot3_positive_count_vs_avg_positive_gain_r20.png"),
     )
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Generate recovery analysis plots.")
+    parser.add_argument(
+        "--plots",
+        nargs="+",
+        choices=["1", "2", "3"],
+        default=["1", "2", "3"],
+        help="Select which plots to run (choices: 1 2 3). Default: all.",
+    )
+    args = parser.parse_args()
+
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     csv_path = INPUT_CSV if os.path.exists(INPUT_CSV) else FALLBACK_INPUT_CSV
     if not os.path.exists(csv_path):
@@ -148,9 +176,15 @@ def main() -> None:
         )
     print(f"Using input CSV: {csv_path}")
     df = _load_and_prepare(csv_path)
-    run_plot_1_avg_recovery_space_gain(df, OUTPUT_DIR)
-    run_plot_2_space_quality_curve(df, OUTPUT_DIR)
-    run_plot_3_positive_exploitation_rate(df, OUTPUT_DIR)
+
+    selected = set(args.plots)
+    if "1" in selected:
+        run_plot_1_avg_recovery_space_gain(df, OUTPUT_DIR)
+    if "2" in selected:
+        run_plot_2_space_quality_curve(df, OUTPUT_DIR)
+    if "3" in selected:
+        run_plot_3_positive_exploitation_rate(df, OUTPUT_DIR)
+
     print(f"Saved plots to: {OUTPUT_DIR}")
 
 

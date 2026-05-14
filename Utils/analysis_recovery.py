@@ -23,6 +23,7 @@ WINDOW_SECONDS = 5.0
 END_CLOCK_TOLERANCE_SECONDS = 0.5
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LOCAL_RADIUS_METERS = 20.0
+DEFAULT_FRAME_RATE_HZ = 30.0
 
 
 def _parse_bool_like(value: Any) -> bool:
@@ -91,6 +92,26 @@ def _resize_2d_to_shape(arr: np.ndarray, target_shape: tuple[int, int]) -> np.nd
     return arr[np.ix_(x_idx, y_idx)]
 
 
+def _estimate_frame_rate_hz(
+    tracking_clock_df: pd.DataFrame,
+    default_hz: float = DEFAULT_FRAME_RATE_HZ,
+) -> float:
+    if "periodGameClockTime" not in tracking_clock_df.columns:
+        return float(default_hz)
+    t = pd.to_numeric(tracking_clock_df["periodGameClockTime"], errors="coerce").to_numpy(dtype=float)
+    if t.size < 2:
+        return float(default_hz)
+    dt = np.diff(t)
+    dt = dt[np.isfinite(dt) & (dt > 0.0)]
+    if dt.size == 0:
+        return float(default_hz)
+    median_dt = float(np.median(dt))
+    if median_dt <= 0.0:
+        return float(default_hz)
+    fps = 1.0 / median_dt
+    return float(fps if np.isfinite(fps) and fps > 0 else default_hz)
+
+
 def avg_recovery_space_gain(
     recovery_df: pd.DataFrame,
     base_path: str = DATA_ROOT,
@@ -147,6 +168,9 @@ def avg_recovery_space_gain(
             continue
 
         tracking_cols = ["frameNum", "periodGameClockTime"]
+        has_period_col = "period" in tracking_df.columns
+        if has_period_col:
+            tracking_cols.append("period")
         missing_tracking_cols = [c for c in tracking_cols if c not in tracking_df.columns]
         if missing_tracking_cols:
             for _, row in group.iterrows():
@@ -169,12 +193,15 @@ def avg_recovery_space_gain(
         tracking_clock_df["periodGameClockTime"] = pd.to_numeric(
             tracking_clock_df["periodGameClockTime"], errors="coerce"
         )
+        if has_period_col:
+            tracking_clock_df["period"] = pd.to_numeric(tracking_clock_df["period"], errors="coerce")
         tracking_clock_df = tracking_clock_df.dropna(subset=["frameNum", "periodGameClockTime"])
         tracking_clock_df = (
             tracking_clock_df.sort_values("frameNum")
             .drop_duplicates(subset=["frameNum"], keep="first")
             .reset_index(drop=True)
         )
+        frame_rate_hz = _estimate_frame_rate_hz(tracking_clock_df)
         model_path = Path(model_rel_path)
         if not model_path.is_absolute():
             model_path = REPO_ROOT / model_path
@@ -247,21 +274,54 @@ def avg_recovery_space_gain(
                 continue
 
             t_target = t0_clock + WINDOW_SECONDS
-            closest_idx = (tracking_clock_df["periodGameClockTime"] - t_target).abs().idxmin()
-            closest_row = tracking_clock_df.loc[closest_idx]
-            t_end_clock = float(closest_row["periodGameClockTime"])
-            t_end_frame = int(float(closest_row["frameNum"]))
-            if abs(t_end_clock - t_target) > END_CLOCK_TOLERANCE_SECONDS:
+
+            # Keep window search in the same period when available.
+            if has_period_col:
+                t0_rows = tracking_clock_df[tracking_clock_df["frameNum"] == frame_num]
+                t0_rows = t0_rows.dropna(subset=["period"])
+                if t0_rows.empty:
+                    _append_skipped_result(
+                        results=results,
+                        base_result=base_result,
+                        error="t0_period_not_found",
+                        frame_num=frame_num,
+                    )
+                    continue
+                t0_period = float(t0_rows.iloc[0]["period"])
+                candidates = tracking_clock_df[
+                    (tracking_clock_df["period"] == t0_period) & (tracking_clock_df["frameNum"] >= frame_num)
+                ].copy()
+            else:
+                candidates = tracking_clock_df[tracking_clock_df["frameNum"] >= frame_num].copy()
+
+            if candidates.empty:
                 _append_skipped_result(
                     results=results,
                     base_result=base_result,
-                    error="t_end_not_found_within_tolerance",
+                    error="empty_5s_window",
                     frame_num=frame_num,
                 )
                 continue
 
-            window_rows = tracking_clock_df[
-                (tracking_clock_df["frameNum"] >= frame_num) & (tracking_clock_df["frameNum"] <= t_end_frame)
+            closest_idx = (candidates["periodGameClockTime"] - t_target).abs().idxmin()
+            closest_row = candidates.loc[closest_idx]
+            t_end_clock = float(closest_row["periodGameClockTime"])
+            t_end_frame = int(float(closest_row["frameNum"]))
+
+            # Fallback to frame-based 5s window if no close-enough clock hit.
+            if abs(t_end_clock - t_target) > END_CLOCK_TOLERANCE_SECONDS:
+                frame_steps_5s = max(1, int(round(WINDOW_SECONDS * frame_rate_hz)))
+                t_end_frame_fb = frame_num + frame_steps_5s
+                t_end_row = candidates[candidates["frameNum"] <= t_end_frame_fb]
+                if t_end_row.empty:
+                    t_end_frame = int(float(candidates.iloc[-1]["frameNum"]))
+                    t_end_clock = float(candidates.iloc[-1]["periodGameClockTime"])
+                else:
+                    t_end_frame = int(float(t_end_row.iloc[-1]["frameNum"]))
+                    t_end_clock = float(t_end_row.iloc[-1]["periodGameClockTime"])
+
+            window_rows = candidates[
+                (candidates["frameNum"] >= frame_num) & (candidates["frameNum"] <= t_end_frame)
             ].copy()
             if window_rows.empty:
                 _append_skipped_result(

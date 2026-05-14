@@ -390,7 +390,7 @@ def _apply_recovery_plot_style() -> None:
     )
 
 
-def plot_team_avg_recovery_gain(df_plot: pd.DataFrame, out_path: str) -> None:
+def plot_team_avg_recovery_gain(df_plot: pd.DataFrame, out_path: str, scope_label: str = "R20") -> None:
     _apply_recovery_plot_style()
     fig, ax = plt.subplots(figsize=(10, 6), facecolor="#f5f1e6")
     ax.set_facecolor("#f5f1e6")
@@ -404,7 +404,7 @@ def plot_team_avg_recovery_gain(df_plot: pd.DataFrame, out_path: str) -> None:
         linewidth=0.4,
     )
     ax.invert_yaxis()
-    ax.set_title("Average Recovery Space Gain (R20)")
+    ax.set_title(f"Average Recovery Space Gain ({scope_label})")
     ax.set_xlabel("Average Recovery Space Gain")
     ax.set_ylabel("Team")
     ax.spines["top"].set_visible(False)
@@ -415,7 +415,7 @@ def plot_team_avg_recovery_gain(df_plot: pd.DataFrame, out_path: str) -> None:
     plt.close(fig)
 
 
-def plot_team_space_quality_curve(df_plot: pd.DataFrame, out_path: str) -> None:
+def plot_team_space_quality_curve(df_plot: pd.DataFrame, out_path: str, scope_label: str = "R20") -> None:
     _apply_recovery_plot_style()
     fig, ax = plt.subplots(figsize=(10, 6), facecolor="#f5f1e6")
     ax.set_facecolor("#f5f1e6")
@@ -430,7 +430,7 @@ def plot_team_space_quality_curve(df_plot: pd.DataFrame, out_path: str) -> None:
             label=str(team),
         )
 
-    ax.set_title("Space Quality Curve After Recovery (R20)")
+    ax.set_title(f"Space Quality Curve After Recovery ({scope_label})")
     ax.set_xlabel("Seconds Since Recovery")
     ax.set_ylabel("Average Space Quality")
     ax.set_xticks([0, 1, 2, 3, 4, 5])
@@ -443,23 +443,44 @@ def plot_team_space_quality_curve(df_plot: pd.DataFrame, out_path: str) -> None:
     plt.close(fig)
 
 
-def plot_team_positive_rate(df_plot: pd.DataFrame, out_path: str) -> None:
+def plot_team_positive_count_vs_avg_positive_gain(
+    df_plot: pd.DataFrame, out_path: str, scope_label: str = "R20"
+) -> None:
     _apply_recovery_plot_style()
     fig, ax = plt.subplots(figsize=(10, 6), facecolor="#f5f1e6")
     ax.set_facecolor("#f5f1e6")
 
-    ax.barh(
-        df_plot["teamName_t0_nextGameEvent"],
-        df_plot["positive_exploitation_rate_pct"],
-        color="#55a868",
+    ax.scatter(
+        df_plot["positive_recovery_rate_pct"],
+        df_plot["avg_positive_recovery_space_gain_r20"],
+        s=70,
+        c="#55a868",
         alpha=0.9,
-        edgecolor="black",
-        linewidth=0.4,
+        edgecolors="black",
+        linewidths=0.4,
     )
-    ax.invert_yaxis()
-    ax.set_title("Positive Exploitation Rate (R20)")
-    ax.set_xlabel("Positive Exploitation Rate (%)")
-    ax.set_ylabel("Team")
+    for _, row in df_plot.iterrows():
+        ax.annotate(
+            str(row["teamName_t0_nextGameEvent"]),
+            (row["positive_recovery_rate_pct"], row["avg_positive_recovery_space_gain_r20"]),
+            textcoords="offset points",
+            xytext=(4, 4),
+            fontsize=8,
+        )
+    ax.set_xlim(75, 95)
+    ax.set_ylim(0.0425, 0.0675)
+    ax.set_xlabel("Space Quality Gain Rate (%)")
+    ax.set_ylabel("Avg Space Quality Gain")
+    ax.set_title("Post-recovery space exploitation: consistency and gain", pad=26)
+    ax.text(
+        0.5,
+        1.03,
+        "Avg space quality gain and space quality gain rate inside a 20m radius around the ball",
+        transform=ax.transAxes,
+        ha="center",
+        va="bottom",
+        fontsize=10,
+    )
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
     ax.grid(False)
