@@ -6,12 +6,19 @@ import numpy as np
 import pandas as pd
 
 from Utils.config import DATA_ROOT
+from Utils.helpers import compute_game_minutes
 from Utils.visualizations import (
     plot_team_avg_recovery_gain,
     plot_team_positive_count_vs_avg_positive_gain,
     plot_team_space_quality_curve,
+    plot_team_style_matrix,
 )
 
+INPUT_CSV_WITH_BOX_ENTRY = os.path.join(
+    DATA_ROOT,
+    "dataset_passes_recovery",
+    "recovery_space_metrics_5s_r20_late_knockout_with_box_entry.csv",
+)
 INPUT_CSV = os.path.join(
     DATA_ROOT,
     "dataset_passes_recovery",
@@ -157,22 +164,88 @@ def run_plot_3_positive_exploitation_rate(df: pd.DataFrame, output_dir: Path) ->
     )
 
 
+def run_plot_4_team_style_matrix(df: pd.DataFrame, output_dir: Path) -> None:
+    if "box_entry_20s" not in df.columns:
+        raise ValueError("Plot 4 requires column 'box_entry_20s' in the input dataset.")
+
+    plot_df = df.copy()
+    plot_df["recovery_space_gain_r20"] = pd.to_numeric(plot_df["recovery_space_gain_r20"], errors="coerce")
+    plot_df["box_entry_20s"] = plot_df["box_entry_20s"].astype(str).str.strip().str.lower().map(
+        {"true": True, "false": False, "1": True, "0": False}
+    )
+    plot_df = plot_df[np.isfinite(plot_df["recovery_space_gain_r20"]) & plot_df["box_entry_20s"].notna()].copy()
+    dedup = plot_df.drop_duplicates(subset=["recovery_key"]).copy()
+    print(f"[plot4] unique recoveries: {len(dedup)}")
+    if dedup.empty:
+        raise ValueError("Plot 4 has no valid rows after filtering.")
+
+    game_minutes_df = compute_game_minutes(
+        base_path=DATA_ROOT,
+        game_ids=dedup["source_game_file"].astype(str).unique().tolist(),
+    )
+    if game_minutes_df.empty:
+        raise ValueError("Plot 4 could not compute game minutes from eventdata.")
+
+    agg = (
+        dedup.groupby("teamName_t0_nextGameEvent", dropna=False)
+        .agg(
+            n_recoveries=("recovery_key", "count"),
+            avg_recovery_space_gain_r20=("recovery_space_gain_r20", "mean"),
+            box_entry_rate_pct=("box_entry_20s", lambda s: float(s.mean()) * 100.0),
+        )
+        .reset_index()
+    )
+
+    team_game_minutes = (
+        dedup[["teamName_t0_nextGameEvent", "source_game_file"]]
+        .astype({"source_game_file": str})
+        .drop_duplicates()
+        .merge(game_minutes_df, on="source_game_file", how="left")
+        .groupby("teamName_t0_nextGameEvent", dropna=False)["total_match_minutes"]
+        .sum()
+        .reset_index(name="team_match_minutes")
+    )
+
+    agg = agg.merge(team_game_minutes, on="teamName_t0_nextGameEvent", how="left")
+    agg["recoveries_per90"] = np.where(
+        pd.to_numeric(agg["team_match_minutes"], errors="coerce") > 0,
+        agg["n_recoveries"] / (agg["team_match_minutes"] / 90.0),
+        np.nan,
+    )
+    agg = agg.sort_values(["box_entry_rate_pct", "avg_recovery_space_gain_r20"], ascending=False)
+    print("[plot4] team summary:")
+    print(agg.to_string(index=False))
+
+    plot_team_style_matrix(
+        agg,
+        str(output_dir / "plot4_team_style_matrix_r20_box_entry.png"),
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate recovery analysis plots.")
     parser.add_argument(
         "--plots",
         nargs="+",
-        choices=["1", "2", "3"],
-        default=["1", "2", "3"],
-        help="Select which plots to run (choices: 1 2 3). Default: all.",
+        choices=["1", "2", "3", "4"],
+        default=["1", "2", "3", "4"],
+        help="Select which plots to run (choices: 1 2 3 4). Default: all.",
     )
     args = parser.parse_args()
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    csv_path = INPUT_CSV if os.path.exists(INPUT_CSV) else FALLBACK_INPUT_CSV
+    if os.path.exists(INPUT_CSV_WITH_BOX_ENTRY):
+        csv_path = INPUT_CSV_WITH_BOX_ENTRY
+    elif os.path.exists(INPUT_CSV):
+        csv_path = INPUT_CSV
+    else:
+        csv_path = FALLBACK_INPUT_CSV
     if not os.path.exists(csv_path):
         raise FileNotFoundError(
-            f"Input CSV not found. Checked:\n- {INPUT_CSV}\n- {FALLBACK_INPUT_CSV}"
+            "Input CSV not found. Checked:\n"
+            f"- {INPUT_CSV_WITH_BOX_ENTRY}\n"
+            f"- {INPUT_CSV}\n"
+            f"- {FALLBACK_INPUT_CSV}"
         )
     print(f"Using input CSV: {csv_path}")
     df = _load_and_prepare(csv_path)
@@ -184,6 +257,8 @@ def main() -> None:
         run_plot_2_space_quality_curve(df, OUTPUT_DIR)
     if "3" in selected:
         run_plot_3_positive_exploitation_rate(df, OUTPUT_DIR)
+    if "4" in selected:
+        run_plot_4_team_style_matrix(df, OUTPUT_DIR)
 
     print(f"Saved plots to: {OUTPUT_DIR}")
 

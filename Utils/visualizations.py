@@ -1,3 +1,5 @@
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -476,6 +478,67 @@ def plot_team_positive_count_vs_avg_positive_gain(
         0.5,
         1.03,
         "Avg space quality gain and space quality gain rate inside a 20m radius around the ball",
+        transform=ax.transAxes,
+        ha="center",
+        va="bottom",
+        fontsize=10,
+    )
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.grid(False)
+
+    fig.savefig(out_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_team_style_matrix(
+    df_plot: pd.DataFrame,
+    out_path: str,
+    scope_label: str = "R20 + BoxEntry20s",
+) -> None:
+    _apply_recovery_plot_style()
+    fig, ax = plt.subplots(figsize=(10, 6), facecolor="#f5f1e6")
+    ax.set_facecolor("#f5f1e6")
+
+    n_vals = pd.to_numeric(df_plot["recoveries_per90"], errors="coerce").to_numpy(dtype=float)
+    n_min = float(np.nanmin(n_vals)) if np.isfinite(n_vals).any() else 1.0
+    n_max = float(np.nanmax(n_vals)) if np.isfinite(n_vals).any() else 1.0
+    if n_max > n_min:
+        sizes = 90.0 + 360.0 * ((n_vals - n_min) / (n_max - n_min))
+    else:
+        sizes = np.full_like(n_vals, 200.0, dtype=float)
+
+    ax.scatter(
+        df_plot["avg_recovery_space_gain_r20"],
+        df_plot["box_entry_rate_pct"],
+        s=sizes,
+        c="#4c72b0",
+        alpha=0.85,
+        edgecolors="black",
+        linewidths=0.5,
+    )
+
+    for _, row in df_plot.iterrows():
+        ax.annotate(
+            str(row["teamName_t0_nextGameEvent"]),
+            (row["avg_recovery_space_gain_r20"], row["box_entry_rate_pct"]),
+            textcoords="offset points",
+            xytext=(4, 4),
+            fontsize=8,
+        )
+
+    mean_x = float(pd.to_numeric(df_plot["avg_recovery_space_gain_r20"], errors="coerce").mean())
+    mean_y = float(pd.to_numeric(df_plot["box_entry_rate_pct"], errors="coerce").mean())
+    ax.axvline(mean_x, color="#7f7f7f", linestyle="--", linewidth=1.0, alpha=0.9)
+    ax.axhline(mean_y, color="#7f7f7f", linestyle="--", linewidth=1.0, alpha=0.9)
+
+    ax.set_xlabel("Avg Space Quality Gain")
+    ax.set_ylabel("Box entry next 20s rate (%)")
+    ax.set_title("Post-recovery space exploitation: gain and direct threat", pad=36)
+    ax.text(
+        0.5,
+        1.02,
+        "Comparison between avg recovery space gain inside a 20m radius and box entry rate\nafter recovery in the next 20s. Size of the badges corresponds to the number of recoveries per 90min.",
         transform=ax.transAxes,
         ha="center",
         va="bottom",

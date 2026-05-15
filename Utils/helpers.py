@@ -4,6 +4,63 @@ import bz2
 import pandas as pd
 import numpy as np
 
+
+def _load_events_from_json(file_path: str) -> pd.DataFrame:
+    with open(file_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    return pd.json_normalize(data)
+
+
+def compute_game_minutes(base_path: str, game_ids: list[str] | None = None) -> pd.DataFrame:
+    events_dir = os.path.join(base_path, "eventdata")
+    rows: list[dict[str, float | str]] = []
+
+    if not os.path.exists(events_dir):
+        return pd.DataFrame(columns=["source_game_file", "total_match_minutes"])
+
+    event_files = sorted([f for f in os.listdir(events_dir) if f.endswith(".json")])
+    if game_ids is not None:
+        keep = {str(g) for g in game_ids}
+        event_files = [f for f in event_files if os.path.splitext(f)[0] in keep]
+
+    for file_name in event_files:
+        game_id = os.path.splitext(file_name)[0]
+        file_path = os.path.join(events_dir, file_name)
+        try:
+            event_df = _load_events_from_json(file_path)
+        except Exception:
+            continue
+
+        total_seconds = np.nan
+        if (
+            "gameEvents.gameEventType" in event_df.columns
+            and "gameEvents.startGameClock" in event_df.columns
+        ):
+            end_rows = event_df[event_df["gameEvents.gameEventType"] == "END"].copy()
+            end_clock = pd.to_numeric(end_rows["gameEvents.startGameClock"], errors="coerce")
+            if end_clock.notna().any():
+                total_seconds = float(end_clock.max())
+
+        if not np.isfinite(total_seconds):
+            for col in ["gameEvents.startGameClock", "possessionEvents.startGameClock"]:
+                if col in event_df.columns:
+                    cand = pd.to_numeric(event_df[col], errors="coerce")
+                    if cand.notna().any():
+                        total_seconds = float(cand.max())
+                        break
+
+        if not np.isfinite(total_seconds) or total_seconds <= 0.0:
+            continue
+
+        rows.append(
+            {
+                "source_game_file": str(game_id),
+                "total_match_minutes": float(total_seconds / 60.0),
+            }
+        )
+
+    return pd.DataFrame(rows, columns=["source_game_file", "total_match_minutes"])
+
 def normalize_players(players):
     if not isinstance(players, list):
         return None

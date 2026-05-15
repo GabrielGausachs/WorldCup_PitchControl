@@ -24,6 +24,13 @@ END_CLOCK_TOLERANCE_SECONDS = 0.5
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LOCAL_RADIUS_METERS = 20.0
 DEFAULT_FRAME_RATE_HZ = 30.0
+BOX_ENTRY_REQUIRED_COLUMNS = [
+    "source_game_file",
+    "t0_startFrame_nextGameEvent",
+    "periodGameClockTime_t0_nextGameEvent",
+    "teamName_t0_nextGameEvent",
+    "homeBall_t0_nextGameEvent",
+]
 
 
 def _parse_bool_like(value: Any) -> bool:
@@ -110,6 +117,145 @@ def _estimate_frame_rate_hz(
         return float(default_hz)
     fps = 1.0 / median_dt
     return float(fps if np.isfinite(fps) and fps > 0 else default_hz)
+
+
+def _is_ball_in_opponent_box(
+    ball_x: np.ndarray,
+    ball_y: np.ndarray,
+    home_team_in_possession: bool,
+) -> np.ndarray:
+    in_y = np.abs(ball_y) <= 20.16
+    if home_team_in_possession:
+        in_x = ball_x >= 36.75
+    else:
+        in_x = ball_x <= -36.75
+    return in_x & in_y
+
+
+def label_box_entry_next_20s(
+    recovery_df: pd.DataFrame,
+    base_path: str = DATA_ROOT,
+    window_seconds: float = 20.0,
+) -> pd.DataFrame:
+    missing = [c for c in BOX_ENTRY_REQUIRED_COLUMNS if c not in recovery_df.columns]
+    if missing:
+        raise ValueError(f"recovery_df missing required columns: {missing}")
+
+    out_df = recovery_df.copy()
+    out_df["box_entry_20s"] = False
+    out_df["box_entry_20s_status"] = "skipped"
+    grouped = out_df.groupby("source_game_file", dropna=False, sort=False)
+
+    for game_id_raw, game_rows in grouped:
+        game_id = str(game_id_raw)
+        if game_id.lower() == "nan":
+            continue
+        try:
+            game = load_game_from_pff(base_path=base_path, game_id=game_id)
+            _, tracking_df = load_files(base_path=base_path, game_id=game_id)
+        except Exception:
+            continue
+
+        tracking_cols = ["frameNum", "periodGameClockTime"]
+        has_period_col = "period" in tracking_df.columns
+        if has_period_col:
+            tracking_cols.append("period")
+        if any(c not in tracking_df.columns for c in tracking_cols):
+            continue
+
+        tracking_clock_df = tracking_df[tracking_cols].copy()
+        tracking_clock_df["frameNum"] = pd.to_numeric(tracking_clock_df["frameNum"], errors="coerce")
+        tracking_clock_df["periodGameClockTime"] = pd.to_numeric(
+            tracking_clock_df["periodGameClockTime"], errors="coerce"
+        )
+        if has_period_col:
+            tracking_clock_df["period"] = pd.to_numeric(tracking_clock_df["period"], errors="coerce")
+        tracking_clock_df = tracking_clock_df.dropna(subset=["frameNum", "periodGameClockTime"])
+        tracking_clock_df = (
+            tracking_clock_df.sort_values("frameNum")
+            .drop_duplicates(subset=["frameNum"], keep="first")
+            .reset_index(drop=True)
+        )
+        if tracking_clock_df.empty:
+            continue
+        if "game_event" not in tracking_df.columns:
+            continue
+
+        frame_event_df = tracking_df[["frameNum", "game_event"]].copy()
+        frame_event_df["frameNum"] = pd.to_numeric(frame_event_df["frameNum"], errors="coerce")
+        frame_event_df = frame_event_df.dropna(subset=["frameNum"])
+        frame_event_df = (
+            frame_event_df.sort_values("frameNum")
+            .drop_duplicates(subset=["frameNum"], keep="first")
+            .reset_index(drop=True)
+        )
+
+        game_frame_to_idx = pd.Series(game.tracking_data.index.values, index=game.tracking_data["frame"]).to_dict()
+
+        for idx, row in game_rows.iterrows():
+            try:
+                frame_num = int(float(row["t0_startFrame_nextGameEvent"]))
+                t0_clock = float(row["periodGameClockTime_t0_nextGameEvent"])
+                if not np.isfinite(t0_clock):
+                    continue
+                team_at_t0 = str(row["teamName_t0_nextGameEvent"])
+                if not team_at_t0 or team_at_t0.lower() == "nan":
+                    continue
+                home_team_in_possession = _parse_bool_like(row["homeBall_t0_nextGameEvent"])
+            except Exception:
+                continue
+
+            if has_period_col:
+                t0_rows = tracking_clock_df[tracking_clock_df["frameNum"] == frame_num].dropna(subset=["period"])
+                if t0_rows.empty:
+                    continue
+                t0_period = float(t0_rows.iloc[0]["period"])
+                candidates = tracking_clock_df[
+                    (tracking_clock_df["period"] == t0_period) & (tracking_clock_df["frameNum"] >= frame_num)
+                ]
+            else:
+                candidates = tracking_clock_df[tracking_clock_df["frameNum"] >= frame_num]
+
+            if candidates.empty:
+                continue
+
+            t_target = t0_clock + float(window_seconds)
+            window_rows = candidates[candidates["periodGameClockTime"] <= t_target].copy()
+            if window_rows.empty:
+                continue
+
+            window_rows = window_rows.merge(frame_event_df, on="frameNum", how="left")
+            window_rows["frame_team_name"] = window_rows["game_event"].apply(
+                lambda x: x.get("team_name") if isinstance(x, dict) else pd.NA
+            )
+            window_rows = window_rows[window_rows["frame_team_name"] == team_at_t0]
+            if window_rows.empty:
+                out_df.at[idx, "box_entry_20s"] = False
+                out_df.at[idx, "box_entry_20s_status"] = "ok"
+                continue
+
+            frame_nums = window_rows["frameNum"].astype(int).to_numpy()
+            frame_idxs_raw = [game_frame_to_idx.get(fn) for fn in frame_nums]
+            frame_idxs = [int(fi) for fi in frame_idxs_raw if fi is not None]
+            if not frame_idxs:
+                continue
+
+            frame_rows = game.tracking_data.loc[frame_idxs, ["ball_x", "ball_y"]].copy()
+            frame_rows["ball_x"] = pd.to_numeric(frame_rows["ball_x"], errors="coerce")
+            frame_rows["ball_y"] = pd.to_numeric(frame_rows["ball_y"], errors="coerce")
+            frame_rows = frame_rows.dropna(subset=["ball_x", "ball_y"])
+            if frame_rows.empty:
+                continue
+
+            in_box = _is_ball_in_opponent_box(
+                ball_x=frame_rows["ball_x"].to_numpy(dtype=float),
+                ball_y=frame_rows["ball_y"].to_numpy(dtype=float),
+                home_team_in_possession=home_team_in_possession,
+            )
+            out_df.at[idx, "box_entry_20s"] = bool(np.any(in_box))
+            out_df.at[idx, "box_entry_20s_status"] = "ok"
+
+    return out_df
 
 
 def avg_recovery_space_gain(
