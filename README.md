@@ -2,7 +2,7 @@
 
 This repository contains the implementation of the analysis presented in the article:
 
-**[“From Theory to Pitch Chapter 2: Space and dominance in the 2022 World Cup”]([text](https://gabrielgausachs.substack.com/p/from-theory-to-pitch-chapter-2-space?r=884tdi))**
+**[“From Theory to Pitch Chapter 2: Space and dominance in the 2022 World Cup”](https://gabrielgausachs.substack.com/p/from-theory-to-pitch-chapter-2-space?r=884tdi)**
 
 ---
 
@@ -40,8 +40,8 @@ And to:
 - Wu and Swartz et al. (2024), *A new metric for pitch control based on an intuitive motion model*
 - Karun Singh, *Introducing Expected Threat (xT)*
 
-- **PFF FC** for making the 2022 World Cup tracking and event data publicly available
-- **DataballPy** for providing the pitch control implementation used in this work
+- PFF FC for making the 2022 World Cup tracking and event data publicly available
+- DataballPy for providing the pitch control implementation used in this work
 
 
 ---
