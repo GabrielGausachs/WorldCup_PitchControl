@@ -2,7 +2,7 @@
 
 This repository contains the implementation of the analysis presented in the article:
 
-**[“From Theory to Pitch Chapter 2: Space and dominance in the 2022 World Cup”](https://gabrielgausachs.substack.com/p/from-theory-to-pitch-chapter-2-space?r=884tdi)**
+**[“From Theory to Pitch Chapter 2: Space and dominance in the 2022 World Cup”](https://open.substack.com/pub/gabrielgausachs/p/from-theory-to-pitch-chapter-2-space?r=884tdi&utm_campaign=post-expanded-share&utm_medium=web)**
 
 ---
 
